@@ -1,0 +1,7 @@
+{
+  "name": "sudoku",
+  "version": "0.1.0",
+  "description": "在 Pane 玩數獨：即時出唯一解題目、三種難度、衝突標紅",
+  "author": { "name": "Steny Liu" },
+  "types": "./types/index.d.ts"
+}

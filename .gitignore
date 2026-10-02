@@ -1,0 +1,11 @@
+.DS_Store
+.env
+*.log
+node_modules/
+.codex/
+todos/
+.worktrees
+.context/
+.claude/worktrees/
+# Claude Code 載入 mod 時自動產生的型別宣告
+plugins/*/.claude-plugin/types/
