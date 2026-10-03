@@ -115,6 +115,19 @@ export const createService = (instanceId: string, { newCredential, hostKey = '' 
     return json(200, { startsInMs: COUNTDOWN_MS })
   }
 
+  /** 房主把大廳中未準備的參賽者移出本局，讓他成為候補者 */
+  const remove = (body: Record<string, unknown>, now: number): Response => {
+    const player = byCredential(body.credential)
+    if (!player?.isHost) return json(403, { error: '只有房主可以移出玩家' })
+    const target = players.find(p => p.nickname === body.nickname)
+    if (phaseAt(now) !== 'lobby' || !target || target.isHost || target.role !== 'participant' || target.isReady) {
+      return json(409, { error: '只能移出還沒準備的參賽者' })
+    }
+    target.role = 'candidate'
+
+    return json(200, { nickname: target.nickname, role: target.role })
+  }
+
   /** 公開狀態：倒數時附上還剩多久 */
   const state = (now: number) => {
     const phase = phaseAt(now)
@@ -133,6 +146,7 @@ export const createService = (instanceId: string, { newCredential, hostKey = '' 
       if (method === 'POST' && path === '/join') return join(parseBody(body))
       if (method === 'POST' && path === '/ready') return ready(parseBody(body), now)
       if (method === 'POST' && path === '/start') return start(parseBody(body), now)
+      if (method === 'POST' && path === '/remove') return remove(parseBody(body), now)
 
       return json(404, { error: 'not found' })
     },

@@ -238,6 +238,44 @@ describe('開局與倒數', () => {
   })
 })
 
+describe('移出本局', () => {
+  test('房主把未準備的 Bob 移出後，Bob 列為候補者，房主就能開局；不是房主的人不能移出', async ($, on) => {
+    const { clock, ui, service } = await hostAs($, on)
+    const bob = credentialOf(service(), 'Bob')
+    const carol = credentialOf(service(), 'Carol')
+    postAs(service(), '/ready', { credential: carol, isReady: true })
+    expect(postAs(service(), '/remove', { credential: carol, nickname: 'Bob' }).status).toBe(403)
+    expect(bob).toBeDefined()
+    await clock.advance(1000)
+
+    await ui.press({ key: 'remove-Bob' })
+
+    expect(await ui.find({ type: 'Text', text: '候補者（1）' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'remove-Bob' })).toBeUndefined()
+
+    await ui.press({ key: 'start-easy' })
+    expect(await ui.find({ type: 'Text', text: '倒數 5 秒' })).toBeDefined()
+  })
+
+  test('被房主移出的玩家，面板顯示自己是候補者、等待下一局，也沒有準備按鈕', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    const service = createService('instance-1', { newCredential: credentials(), hostKey: 'key' })
+    const host = (JSON.parse(postAs(service, '/join', { nickname: 'Host', hostKey: 'key' }).text) as { credential: string })
+      .credential
+    routeFetch(on, service, { isDown: false }, clock)
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+    await ui.input({ key: 'nickname', text: 'Bob' })
+
+    postAs(service, '/remove', { credential: host, nickname: 'Bob' })
+    await clock.advance(1000)
+
+    expect(await ui.find({ type: 'Text', text: '你是候補者，等待下一局' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'ready' })).toBeUndefined()
+  })
+})
+
 describe('玩家憑證', () => {
   test('同一個 session 對同一個共同服務再加入一次，沿用原本的身分，不會多出一位玩家', async ($, on) => {
     stubEngine(on)

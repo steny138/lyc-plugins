@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Difficulty, Me, ServiceState } from '../types'
+import type { Difficulty, Me, PlayerSummary, ServiceState } from '../types'
 
 const PANE = 'sudoku-online'
 const TITLE = '數獨對戰'
@@ -316,6 +316,12 @@ export const register: Register = on => {
         </Box>
       ) : null
 
+    const participants = current.state?.players.filter(player => player.role === 'participant') ?? []
+    const candidates = current.state?.players.filter(player => player.role === 'candidate') ?? []
+    // 房主在大廳可以移出還沒準備的參賽者（不含自己）
+    const canRemove = (player: PlayerSummary) =>
+      me?.isHost === true && current.state?.phase === 'lobby' && !player.isHost && !player.isReady
+
     // 大廳階段的房主才有開局按鈕，一個難度一個
     const startButtons =
       me?.isHost && current.state?.phase === 'lobby' ? (
@@ -355,6 +361,7 @@ export const register: Register = on => {
               <Text bold>{`你是 ${current.me?.nickname ?? ''}${current.me?.isHost ? HOST_MARK : ''}`}</Text>
             )}
             {current.me === null && current.joinError ? <Text color="red">{current.joinError}</Text> : null}
+            {mine?.role === 'candidate' ? <Text color="yellow">你是候補者，等待下一局</Text> : null}
             {readyButton}
             {startButtons}
             {current.state?.phase === 'countdown' ? (
@@ -365,12 +372,30 @@ export const register: Register = on => {
               <Text dimColor>讀取中…</Text>
             ) : (
               <Box flexDirection="column" marginTop={1}>
-                <Text dimColor>{`玩家（${current.state.players.length}）`}</Text>
-                {current.state.players.map(player => (
-                  <Text key={`player-${player.nickname}`}>
-                    {`・${player.nickname}${player.isHost ? HOST_MARK : ''}${player.isReady ? READY_MARK : ''}`}
-                  </Text>
+                <Text dimColor>{`玩家（${participants.length}）`}</Text>
+                {participants.map(player => (
+                  <Box key={`player-${player.nickname}`} gap={1}>
+                    <Text>{`・${player.nickname}${player.isHost ? HOST_MARK : ''}${player.isReady ? READY_MARK : ''}`}</Text>
+                    {canRemove(player) && me ? (
+                      <Button
+                        key={`remove-${player.nickname}`}
+                        label="移出"
+                        plain
+                        onPress={() =>
+                          void act($, current.url, '/remove', { credential: me.credential, nickname: player.nickname })
+                        }
+                      />
+                    ) : null}
+                  </Box>
                 ))}
+                {candidates.length > 0 ? (
+                  <Box flexDirection="column" marginTop={1}>
+                    <Text dimColor>{`候補者（${candidates.length}）`}</Text>
+                    {candidates.map(player => (
+                      <Text key={`candidate-${player.nickname}`} dimColor>{`・${player.nickname}`}</Text>
+                    ))}
+                  </Box>
+                ) : null}
               </Box>
             )}
           </Box>
