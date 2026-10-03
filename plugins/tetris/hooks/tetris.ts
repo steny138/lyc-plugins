@@ -28,8 +28,9 @@ export const newGame = (seed: number): Game => {
 export type Move = 'left' | 'right' | 'down'
 const translate = (block: Block, dx: number, dy: number): Block => ({ ...block, origin: [block.origin[0] + dx, block.origin[1] + dy], extra: block.extra.map(([x, y]) => [x + dx, y + dy]) })
 const valid = (game: Game, block: Block) => coords(block).every(([x, y]) => x >= 1 && x <= 10 && y >= 1 && !game.board[`${x},${y}`])
+export const isGameOver = (game: Game) => game.block.origin[0] === 6 && game.block.origin[1] === 22 && coords(game.block).some(([x, y]) => y === 1 || Boolean(game.board[`${x},${y - 1}`]))
 export const move = (game: Game, direction: Move): Game => {
-  if (game.locked || game.paused) return game
+  if (game.locked || game.paused || isGameOver(game)) return game
   const candidate = translate(game.block, direction === 'left' ? -1 : direction === 'right' ? 1 : 0, direction === 'down' ? -1 : 0)
   return valid(game, candidate) ? { ...game, block: candidate } : game
 }
@@ -40,7 +41,7 @@ const rotateRaw = (block: Block): Block => {
   return { ...block, extra: block.extra.map(([x, y]) => clockwise ? [ox + y - oy, oy - x + ox] : [ox - y + oy, oy + x - ox]) }
 }
 export const rotate = (game: Game): Game => {
-  if (game.locked || game.paused) return game
+  if (game.locked || game.paused || isGameOver(game)) return game
   for (const dx of [0, -1, 1]) {
     const candidate = rotateRaw(translate(game.block, dx, 0))
     if (valid(game, candidate)) return { ...game, block: candidate }
@@ -49,17 +50,26 @@ export const rotate = (game: Game): Game => {
 }
 export const interval = (level: number) => Math.floor(400000 * 0.85 ** (2 * level)) / 1000
 export const tick = (game: Game): Game => {
-  if (game.paused) return game
+  if (game.paused || isGameOver(game)) return game
   const fallen = move({ ...game, locked: false }, 'down')
   if (fallen.block !== game.block) return fallen
   const board = { ...game.board }
   for (const [x, y] of coords(game.block)) board[`${x},${y}`] = game.block.shape
+  const fullRows: number[] = []
+  for (let y = 1; y <= 20; y++) if (Array.from({ length: 10 }, (_, i) => board[`${i + 1},${y}`]).every(Boolean)) fullRows.push(y)
+  const cleared: Record<string, Shape> = {}
+  for (const [key, shape] of Object.entries(board)) {
+    const [x, y] = key.split(',').map(Number) as Coord
+    if (!fullRows.includes(y)) cleared[`${x},${y - fullRows.filter(row => row < y).length}`] = shape
+  }
+  const lines = game.lines + fullRows.length
+  const score = game.score + ([0, 40, 100, 300, 1200][Math.min(4, fullRows.length)]! * (game.level + 1))
   const [next, bag, random] = draw(game.bag, game.random)
-  return { ...game, board, block: spawn(game.next), next, bag, random, locked: false }
+  return { ...game, board: cleared, score, lines, level: game.level < 15 && lines >= 10 * (game.level + 1) ? game.level + 1 : game.level, block: spawn(game.next), next, bag, random, locked: false }
 }
 
 export const drop = (game: Game): Game => {
-  if (game.paused || game.locked) return game
+  if (game.paused || game.locked || isGameOver(game)) return game
   let result = game
   while (true) {
     const fallen = move(result, 'down')

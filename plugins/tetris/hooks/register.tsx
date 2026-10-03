@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import { newGame, move, rotate, tick, interval, drop } from './tetris'
+import { newGame, move, rotate, tick, interval, drop, isGameOver } from './tetris'
 import { raster } from './render'
 const game = atom({ plugin: 'tetris', key: 'game' } as const, null)
 let timer: { cancel: () => void } | undefined
@@ -14,14 +14,14 @@ const schedule = ($: EngineInterface, delay: number) => {
     await update($, game, prev => token === generation && prev ? tick(prev) : prev)
     if (token !== generation) return
     const current = await read($, game)
-    if (current && !current.paused) schedule($, interval(current.level))
+    if (current && !current.paused && !isGameOver(current)) schedule($, interval(current.level))
   })
 }
 const stop = () => { generation++; timer?.cancel(); timer = undefined }
 const pause = async ($: EngineInterface) => {
-  await update($, game, prev => prev && !prev.locked ? { ...prev, paused: !prev.paused } : prev)
+  await update($, game, prev => prev && !prev.locked && !isGameOver(prev) ? { ...prev, paused: !prev.paused } : prev)
   const current = await read($, game)
-  if (!current || current.locked) return
+  if (!current || current.locked || isGameOver(current)) return
   stop()
   if (!current.paused) schedule($, interval(current.level))
 }
@@ -30,7 +30,7 @@ const restart = async ($: EngineInterface) => {
   stop()
   await update($, game, prev => ({ ...newGame(seed), paused: prev?.paused ?? false }))
   const current = await read($, game)
-  if (current && !current.paused) schedule($, interval(current.level))
+  if (current && !current.paused && !isGameOver(current)) schedule($, interval(current.level))
 }
 export const register: Register = on => {
   on('session.start', async ($, e, next) => { await $.command.register({ name: 'tetris', description: '開關俄羅斯方塊面板' }); return next(e) })
@@ -60,7 +60,7 @@ export const register: Register = on => {
       <Button key="drop" label="落底 F" hotkey="f" onPress={() => update($, game, prev => prev ? drop(prev) : prev)} />
       <Button key="pause" label={current.paused ? "繼續 P" : "暫停 P"} hotkey="p" onPress={() => pause($)} />
       <Button key="restart" label="重新開始 R" hotkey="r" onPress={() => restart($)} />
-      <Text>{current.paused ? '已暫停' : current.locked ? '正在固定（下一 tick）' : '遊戲中'}</Text>
+      <Text>{isGameOver(current) ? '遊戲結束' : current.paused ? '已暫停' : current.locked ? '正在固定（下一 tick）' : '遊戲中'}</Text>
       <Text key="next">{`下一塊：${current.next}`}</Text>
       <Text key="score">{`分數：${current.score}`}</Text>
       <Text key="lines">{`消行：${current.lines}`}</Text>

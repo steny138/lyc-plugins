@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { stubEngine, run, mountPane, board } from './test-support'
+import { stubEngine, run, mountPane, board, place, SINGLE_STEPS, LONG_STEPS } from './test-support'
 test('指令開啟自己的棋盤、下一塊與初始統計', async ($, on) => {
   stubEngine(on)
   mock.clock(on)
@@ -122,4 +122,76 @@ test('暫停與重新開始保留暫停，繼續後不補跑時間', async ($, o
   await ui.press({ key: 'pause' })
   await clock.advance(399); expect(await board(ui)).toEqual(restarted)
   await clock.advance(1); await clock.advance(400); expect(await board(ui)).not.toEqual(restarted)
+})
+
+test('第 2 行填滿後消除一行，上方下移並加 40 分', async ($, on) => {
+  stubEngine(on); const clock = mock.clock(on); await run($); const ui = await mountPane($)
+  for (const step of SINGLE_STEPS) { await place(ui, step); await clock.advance(400) }
+  expect(await ui.find({ type: 'Text', text: '消行：1' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '分數：40' })).toBeDefined()
+  expect((await board(ui)).slice(-3)).toEqual(['........S.','.ZZ.TTTZSS','OOLLL.ZTTT'])
+})
+
+test('跨袋後消除四行，先以舊等級加分再升級，下一間隔為 289ms', async ($, on) => {
+  stubEngine(on); const clock = mock.clock(on); await run($); const ui = await mountPane($)
+  const shapes = ['L']
+  for (let i = 0; i < 32; i++) {
+    shapes.push((await ui.find({ type: 'Text', text: /^下一塊：/ }))!.text.slice(-1))
+    await place(ui, LONG_STEPS[i]!); await clock.advance(400)
+  }
+  for (const shape of ['I','O','T','S','Z','J','L']) expect(shapes.slice(0, 28).filter(s => s === shape)).toHaveLength(4)
+  expect(await ui.find({ type: 'Text', text: '消行：10' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '分數：1440' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '等級：1' })).toBeDefined()
+  expect((await board(ui)).slice(-5)).toEqual(['.......J..','.....T.J..','.ZOOTTJJL.','ZZOOSTLLL.','ILJ.SSS.II'])
+  await ui.press({ key: 'down' }); await ui.press({ key: 'down' }); await ui.press({ key: 'down' })
+  const before = await board(ui)
+  await clock.advance(288); expect(await board(ui)).toEqual(before)
+  await clock.advance(1); expect(await board(ui)).not.toEqual(before)
+})
+test('同局二行、非相鄰三行與連續三行按當前等級計分並正確搬移', async ($, on) => {
+  stubEngine(on); const clock = mock.clock(on); await run($); const ui = await mountPane($)
+  for (let i = 0; i < 100; i++) {
+    await place(ui, LONG_STEPS[i]!); await clock.advance(400)
+    if (i === 33) {
+      expect(await ui.find({ type: 'Text', text: '消行：12' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: '分數：1640' })).toBeDefined()
+      expect((await board(ui)).slice(-3)).toEqual(['.Z.....J..','ZZ...T.JLL','ILJ.SSS.II'])
+    }
+    if (i === 77) {
+      // 第 3、4、6 行一起刪除：第 5 行只下移兩格，不能當作三個相鄰行。
+      expect(await ui.find({ type: 'Text', text: '消行：25' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: '分數：3520' })).toBeDefined()
+      expect((await board(ui)).slice(-4)).toEqual(['TTZZ.T..OO','TT.JSLLIOO','ZZ.SSIJIOO','ZZ.SSIIIOO'])
+    }
+  }
+  expect(await ui.find({ type: 'Text', text: '消行：35' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '分數：5700' })).toBeDefined()
+  expect((await board(ui)).slice(-6)).toEqual(['...IT..JJJ','SSILJSSIZ.','TTZZJT.IOO','TT.JSLLIOO','ZZ.SSIJIOO','ZZ.SSIIIOO'])
+})
+test('累計 160 行仍維持內部等級 15 上限與原版間隔', async ($, on) => {
+  stubEngine(on); const clock = mock.clock(on); await run($); const ui = await mountPane($)
+  for (const step of LONG_STEPS) {
+    await place(ui, step)
+    const level = Number((await ui.find({ type: 'Text', text: /^等級：/ }))!.text.slice(3))
+    // 依參考 ticker 的有效間隔送出下一次正常 tick，避免高等級多次下落改變輸入局面。
+    await clock.advance(Math.floor(400000 * .85 ** (2 * level)) / 1000)
+  }
+  expect(await ui.find({ type: 'Text', text: '消行：160' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '等級：15' })).toBeDefined()
+  await ui.press({ key: 'down' }); await ui.press({ key: 'down' }); await ui.press({ key: 'down' })
+  const before = await board(ui)
+  await clock.advance(3.051); expect(await board(ui)).toEqual(before)
+  await clock.advance(.002); expect(await board(ui)).not.toEqual(before)
+})
+test('出生位置停止下落才結束，結束後停止操作與計時並可重開', async ($, on) => {
+  stubEngine(on); const clock = mock.clock(on); await run($); const ui = await mountPane($)
+  for (let i = 0; i < 18; i++) { await ui.press({ key: 'drop' }); await clock.advance(400) }
+  expect(await ui.find({ type: 'Text', text: '遊戲結束' })).toBeDefined()
+  const before = await board(ui)
+  for (const key of ['left','right','down','rotate','drop','pause']) await ui.press({ key })
+  await clock.advance(4000); expect(await board(ui)).toEqual(before)
+  await ui.press({ key: 'restart' })
+  expect(await ui.find({ type: 'Text', text: '遊戲中' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '分數：0' })).toBeDefined()
 })
