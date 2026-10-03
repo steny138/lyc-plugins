@@ -11,6 +11,10 @@ const OPEN_ARGS = { id: PANE, title: TITLE, columns: 72, rows: 26 }
 const POLL_MS = 1000
 
 const connection = atom({ plugin: 'sudoku-online', key: 'connection' } as const, null)
+const hosting = atom({ plugin: 'sudoku-online', key: 'hosting' } as const, null)
+
+/** 共同服務啟動時在 stdout 印出的第一行 */
+type Listening = { port: number; addresses: string[] }
 
 /** 向共同服務讀取目前狀態，存進 connection；連不上時只標記中斷，保留最後的狀態 */
 const refresh = async ($: EngineInterface, url: string) => {
@@ -28,24 +32,70 @@ const refresh = async ($: EngineInterface, url: string) => {
   })
 }
 
-export const register: Register = on => {
-  /** 目前的輪詢計時器；模組重新載入時歸零，由下一次 join 重新啟動 */
-  let poller: Timer | null = null
+/** 目前的輪詢計時器；模組重新載入時歸零，由下一次 join 重新啟動 */
+let poller: Timer | null = null
 
+/** 連上共同服務並開始輪詢；寫入 connection 會讓面板重畫，所以輪詢只要更新狀態 */
+const connect = async ($: EngineInterface, url: string) => {
+  await update($, connection, () => ({ url, state: null, isConnected: false }))
+  await refresh($, url)
+  poller?.cancel()
+  poller = $.clock.every(POLL_MS, () => void refresh($, url))
+}
+
+/**
+ * 以 Node 子程序啟動共同服務。子程序活多久，這個迴圈就跑多久；
+ * 模組卸載時引擎會結束子程序（ADR 0001）。
+ */
+const host = async ($: EngineInterface) => {
+  await update($, hosting, () => ({ status: 'starting' as const }))
+  let stdout = ''
+  let stderr = ''
+  let reason: string
+  try {
+    const child = $.process.spawn({ argv: ['node', `${$.plugin.root}/service/server.ts`] })
+    for await (const { stream, text } of child) {
+      if (stream === 'stderr') {
+        stderr += text
+        continue
+      }
+      stdout += text
+      const newline = stdout.indexOf('\n')
+      if (newline === -1 || (await read($, hosting))?.status === 'running') continue
+      const { port, addresses } = JSON.parse(stdout.slice(0, newline)) as Listening
+      await update($, hosting, () => ({
+        status: 'running' as const,
+        shareUrls: addresses.map(address => `http://${address}:${port}`),
+      }))
+      await connect($, `http://127.0.0.1:${port}`)
+    }
+    reason = stderr.trim().split('\n').at(-1) || '共同服務已結束'
+  } catch (error) {
+    reason = error instanceof Error ? error.message : String(error)
+  }
+  await update($, hosting, () => ({ status: 'failed' as const, reason }))
+}
+
+export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'sudoku-online', description: '數獨對戰：/sudoku-online join <位址>' })
+    await $.command.register({
+      name: 'sudoku-online',
+      description: '數獨對戰：/sudoku-online host 啟動共同服務、/sudoku-online join <位址> 加入',
+    })
 
     return next(e)
   })
 
   on('command.run', { command: 'sudoku-online' }, async ($, e) => {
     const [action, url] = e.args.trim().split(/\s+/)
+    if (action === 'host') {
+      void host($)
+      await $.ui.open(OPEN_ARGS)
+
+      return { text: '正在啟動共同服務…' }
+    }
     if (action === 'join' && url) {
-      await update($, connection, () => ({ url, state: null, isConnected: false }))
-      await refresh($, url)
-      // 寫入 connection 會讓面板重畫，所以輪詢只要更新狀態
-      poller?.cancel()
-      poller = $.clock.every(POLL_MS, () => void refresh($, url))
+      await connect($, url)
       await $.ui.open(OPEN_ARGS)
 
       return { text: `已連線共同服務 ${url}。` }
@@ -58,10 +108,31 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const current = await read($, connection)
-    if (current === null) return <Text dimColor>輸入 /sudoku-online join &lt;位址&gt; 連線共同服務</Text>
+    const hosted = await read($, hosting)
+    const hostLine =
+      hosted === null ? null : hosted.status === 'starting' ? (
+        <Text dimColor>共同服務啟動中…</Text>
+      ) : hosted.status === 'running' ? (
+        <Box flexDirection="column">
+          {hosted.shareUrls.map(shareUrl => (
+            <Text key={shareUrl} color="green">{`分享位址：${shareUrl}`}</Text>
+          ))}
+        </Box>
+      ) : (
+        <Text color="red">{`共同服務啟動失敗：${hosted.reason}`}</Text>
+      )
+    if (current === null) {
+      return (
+        <Box flexDirection="column" paddingTop={1} paddingLeft={2}>
+          {hostLine}
+          <Text dimColor>輸入 /sudoku-online host 啟動共同服務，或 /sudoku-online join &lt;位址&gt; 加入</Text>
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column" paddingTop={1} paddingLeft={2}>
+        {hostLine}
         <Text>{`共同服務：${current.url}`}</Text>
         <Text>{current.state ? `計數：${current.state.count}` : '讀取中…'}</Text>
         {current.isConnected ? null : <Text color="red">連線中斷</Text>}

@@ -85,6 +85,64 @@ describe('連線共同服務', () => {
   })
 })
 
+describe('房主一鍵啟動共同服務', () => {
+  test('啟動後顯示可分享的區網位址，並連上本機的共同服務', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    routeFetch(on, createService('instance-1'))
+    // 子程序印出位址後持續執行（等一個不會到的時間）
+    on('process.spawn', async function* () {
+      yield { stream: 'stdout' as const, text: '{"port":47900,"addresses":["192.168.1.5"]}\n' }
+      await clock.sleep(24 * 60 * 60 * 1000)
+
+      return { value: { code: 0, signal: null } }
+    })
+
+    await run($, 'host')
+    await clock.settle()
+
+    const ui = await mountPane($)
+    expect(await ui.find({ type: 'Text', text: '分享位址：http://192.168.1.5:47900' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '共同服務：http://127.0.0.1:47900' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '計數：0' })).toBeDefined()
+  })
+
+  test('房主電腦有多個區網位址時全部列出', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    routeFetch(on, createService('instance-1'))
+    on('process.spawn', async function* () {
+      yield { stream: 'stdout' as const, text: '{"port":47900,"addresses":["192.168.0.113","192.168.139.3"]}\n' }
+      await clock.sleep(24 * 60 * 60 * 1000)
+
+      return { value: { code: 0, signal: null } }
+    })
+
+    await run($, 'host')
+    await clock.settle()
+
+    const ui = await mountPane($)
+    expect(await ui.find({ type: 'Text', text: '分享位址：http://192.168.0.113:47900' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '分享位址：http://192.168.139.3:47900' })).toBeDefined()
+  })
+
+  test('共同服務啟動失敗時顯示失敗原因', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    on('process.spawn', async function* () {
+      yield { stream: 'stderr' as const, text: 'listen EADDRINUSE: address already in use 0.0.0.0:47900\n' }
+
+      return { value: { code: 1, signal: null } }
+    })
+
+    await run($, 'host')
+    await clock.settle()
+
+    const ui = await mountPane($)
+    expect(await ui.find({ type: 'Text', text: '共同服務啟動失敗：listen EADDRINUSE: address already in use 0.0.0.0:47900' })).toBeDefined()
+  })
+})
+
 describe('輪詢', () => {
   test('共同服務的計數改變後，一秒內面板跟著更新', async ($, on) => {
     stubEngine(on)

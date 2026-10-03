@@ -15,8 +15,15 @@ export type Connection = {
   isConnected: boolean
 }
 
+/** 房主啟動的共同服務子程序 */
+export type Hosting =
+  | { status: 'starting' }
+  /** shareUrls：給同區網玩家連線的位址；房主電腦有幾個區網 IPv4 就有幾個 */
+  | { status: 'running'; shareUrls: string[] }
+  | { status: 'failed'; reason: string }
+
 declare module 'claude-code' {
   interface PluginState {
-    'sudoku-online': { connection: Connection | null }
+    'sudoku-online': { connection: Connection | null; hosting: Hosting | null }
   }
 }
