@@ -15,7 +15,7 @@ export type Ui = Awaited<ReturnType<typeof mountPane>>
 /** 只從 Raster 外部畫面讀回遊戲格，不存取 atom。 */
 export const board = async (ui: Ui) => {
   const el = await ui.find({ key: 'board' })
-  const bytes = Uint8Array.fromBase64(el.props.cells as string)
+  const bytes = Uint8Array.fromBase64(el!.props.cells as string)
   const data = new DataView(bytes.buffer)
   return Array.from({ length: 20 }, (_, row) => Array.from({ length: 10 }, (_, col) => String.fromCharCode(data.getUint32((row * 20 + col * 2) * 12, true))).join(''))
 }

@@ -23,12 +23,13 @@ const draw = (bag: Shape[], random: number): [Shape, Shape[], number] => {
 export const newGame = (seed: number): Game => {
   const [first, bag, random] = draw([], seed >>> 0)
   const [next, rest, state] = draw(bag, random)
-  return { block: spawn(first), next, bag: rest, random: state, board: {}, score: 0, lines: 0, level: 0 }
+  return { block: spawn(first), next, bag: rest, random: state, board: {}, score: 0, lines: 0, level: 0, locked: false, paused: false }
 }
 export type Move = 'left' | 'right' | 'down'
 const translate = (block: Block, dx: number, dy: number): Block => ({ ...block, origin: [block.origin[0] + dx, block.origin[1] + dy], extra: block.extra.map(([x, y]) => [x + dx, y + dy]) })
 const valid = (game: Game, block: Block) => coords(block).every(([x, y]) => x >= 1 && x <= 10 && y >= 1 && !game.board[`${x},${y}`])
 export const move = (game: Game, direction: Move): Game => {
+  if (game.locked || game.paused) return game
   const candidate = translate(game.block, direction === 'left' ? -1 : direction === 'right' ? 1 : 0, direction === 'down' ? -1 : 0)
   return valid(game, candidate) ? { ...game, block: candidate } : game
 }
@@ -39,9 +40,30 @@ const rotateRaw = (block: Block): Block => {
   return { ...block, extra: block.extra.map(([x, y]) => clockwise ? [ox + y - oy, oy - x + ox] : [ox - y + oy, oy + x - ox]) }
 }
 export const rotate = (game: Game): Game => {
+  if (game.locked || game.paused) return game
   for (const dx of [0, -1, 1]) {
     const candidate = rotateRaw(translate(game.block, dx, 0))
     if (valid(game, candidate)) return { ...game, block: candidate }
   }
   return game
+}
+export const interval = (level: number) => Math.floor(400000 * 0.85 ** (2 * level)) / 1000
+export const tick = (game: Game): Game => {
+  if (game.paused) return game
+  const fallen = move({ ...game, locked: false }, 'down')
+  if (fallen.block !== game.block) return fallen
+  const board = { ...game.board }
+  for (const [x, y] of coords(game.block)) board[`${x},${y}`] = game.block.shape
+  const [next, bag, random] = draw(game.bag, game.random)
+  return { ...game, board, block: spawn(game.next), next, bag, random, locked: false }
+}
+
+export const drop = (game: Game): Game => {
+  if (game.paused || game.locked) return game
+  let result = game
+  while (true) {
+    const fallen = move(result, 'down')
+    if (fallen === result) return { ...result, locked: true }
+    result = fallen
+  }
 }
