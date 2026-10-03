@@ -85,6 +85,17 @@ describe('連線共同服務', () => {
   })
 })
 
+describe('面板開關', () => {
+  test('面板看得到時再執行 /sudoku-online 就關閉', async ($, on) => {
+    const env = stubEngine(on)
+    await run($)
+
+    const { text } = await run($)
+    expect(text).toContain('已關閉')
+    expect(env.isOpen).toBe(false)
+  })
+})
+
 describe('房主一鍵啟動共同服務', () => {
   test('啟動後顯示可分享的區網位址，並連上本機的共同服務', async ($, on) => {
     stubEngine(on)

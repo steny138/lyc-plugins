@@ -32,6 +32,10 @@ const refresh = async ($: EngineInterface, url: string) => {
   })
 }
 
+/** Pane 開著、已畫在畫面上、且是目前顯示的分頁 */
+const isPaneVisible = async ($: EngineInterface): Promise<boolean> =>
+  (await $.ui.panes()).some(pane => pane.id === PANE && pane.isPlaced && pane.isShown)
+
 /** 請共同服務把計數加一，再讀回狀態；連不上時由 refresh 標記中斷 */
 const bump = async ($: EngineInterface, url: string) => {
   try {
@@ -109,6 +113,12 @@ export const register: Register = on => {
       await $.ui.open(OPEN_ARGS)
 
       return { text: `已連線共同服務 ${url}。` }
+    }
+    // 不帶參數時是開關：看得到就關掉，否則打開
+    if (await isPaneVisible($)) {
+      await $.ui.close({ id: PANE })
+
+      return { text: '數獨對戰面板已關閉。' }
     }
     await $.ui.open(OPEN_ARGS)
 
