@@ -16,6 +16,14 @@ claude plugin validate .                # the marketplace manifest
 
 There is no npm, build or lint step. `claude plugin test` cannot filter to a single test: it only takes a plugin folder and runs all of its test files.
 
+Type-check a plugin with `npx -y -p typescript tsc -p plugins/<name>` once Claude Code has loaded it (loading generates `.claude-plugin/types/`). `plugins/sudoku-online/service/server.ts` is outside that check: it uses `node:` modules and the template has no Node types.
+
+### Trying a mod in a live session
+
+- `claude --plugin-dir plugins/<name>` loads a plugin from the repo for one session.
+- Hot reload (via the `plugin-authoring` skill) only watches the session's dev-mods folder. **A symlink placed there loads once but never reloads**: neither editing the files it points to nor recreating the symlink triggers a reload. Put a real copy there (`rsync -a --exclude '.claude-plugin/types' plugins/<name>/ <dev-mods>/<name>/`) and re-sync after each change.
+- A reload unloads the module: module variables (timers) are gone, `$.state` values survive, `session.start` fires again, and children started with `$.process.spawn` are killed.
+
 ## Mod architecture
 
 - `types` in `plugin.json` points to `types/index.d.ts`, which declares the plugin's state types via `declare module 'claude-code' { interface PluginState { ... } }`. `hooks/hooks.json` lists the hooks modules to load.
