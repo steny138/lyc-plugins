@@ -31,9 +31,19 @@ const parseBody = (body: string | undefined): Record<string, unknown> => {
 export const createService = (instanceId: string, { newCredential }: ServiceOptions): Service => {
   const players: Player[] = []
 
+  /** 和別人重複時依序加上 #2、#3…，直到沒有人用 */
+  const uniqueNickname = (wanted: string) => {
+    const taken = new Set(players.map(player => player.nickname))
+    if (!taken.has(wanted)) return wanted
+    let n = 2
+    while (taken.has(`${wanted}#${n}`)) n += 1
+
+    return `${wanted}#${n}`
+  }
+
   const join = (body: Record<string, unknown>): Response => {
-    const nickname = typeof body.nickname === 'string' ? body.nickname : ''
-    const player: Player = { credential: newCredential(), nickname, isHost: false }
+    const wanted = typeof body.nickname === 'string' ? body.nickname : ''
+    const player: Player = { credential: newCredential(), nickname: uniqueNickname(wanted), isHost: false }
     players.push(player)
 
     return json(200, player)

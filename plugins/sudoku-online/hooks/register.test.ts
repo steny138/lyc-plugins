@@ -112,6 +112,21 @@ describe('加入與暱稱', () => {
     await clock.advance(1000)
     expect(await ui.find({ type: 'Text', text: '・Bob' })).toBeDefined()
   })
+
+  test('暱稱和別人重複時，共同服務自動加上後綴', async ($, on) => {
+    stubEngine(on)
+    const service = newService()
+    joinAs(service, 'Alice')
+    routeFetch(on, service)
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+
+    await ui.input({ key: 'nickname', text: 'Alice' })
+
+    expect(await ui.find({ type: 'Text', text: '你是 Alice#2' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Alice' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Alice#2' })).toBeDefined()
+  })
 })
 
 describe('連線共同服務', () => {
