@@ -383,6 +383,33 @@ describe('本機填答', () => {
   })
 })
 
+describe('本局狀態', () => {
+  test('面板顯示本局目前的階段：等待準備、倒數中', async ($, on) => {
+    const { ui } = await hostAs($, on)
+    expect(await ui.find({ type: 'Text', text: '本局：等待準備' })).toBeDefined()
+
+    await ui.press({ key: 'start-easy' })
+    expect(await ui.find({ type: 'Text', text: '本局：倒數中' })).toBeDefined()
+  })
+
+  test('候補者也看得出本局已經開始', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    const service = createService('instance-1', { newCredential: credentials(), hostKey: 'key' })
+    const host = (JSON.parse(postAs(service, '/join', { nickname: 'Host', hostKey: 'key' }).text) as { credential: string })
+      .credential
+    postAs(service, '/start', { credential: host, difficulty: 'easy' }, clock.now())
+    routeFetch(on, service, { isDown: false }, clock)
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+    await ui.input({ key: 'nickname', text: 'Late' })
+
+    await clock.advance(5000)
+
+    expect(await ui.find({ type: 'Text', text: '本局：進行中' })).toBeDefined()
+  })
+})
+
 describe('開局後加入', () => {
   test('倒數期間加入的玩家是候補者', async ($, on) => {
     stubEngine(on)

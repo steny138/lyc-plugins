@@ -23,6 +23,13 @@ const LEVELS: Record<Difficulty, { label: string; hotkey: string }> = {
 }
 const DIFFICULTIES = Object.keys(LEVELS) as Difficulty[]
 
+/** 面板上的本局狀態文字 */
+const PHASE_LABELS: Record<ServiceState['phase'], string> = {
+  lobby: '本局：等待準備',
+  countdown: '本局：倒數中',
+  playing: '本局：進行中',
+}
+
 /** 第 n 列（或行）之後是宮與宮的邊界 */
 const isBoxEdge = (n: number) => n === 2 || n === 5
 
@@ -445,6 +452,7 @@ export const register: Register = on => {
               <Text bold>{`你是 ${current.me?.nickname ?? ''}${current.me?.isHost ? HOST_MARK : ''}`}</Text>
             )}
             {current.me === null && current.joinError ? <Text color="red">{current.joinError}</Text> : null}
+            {current.state ? <Text dimColor>{PHASE_LABELS[current.state.phase]}</Text> : null}
             {mine?.role === 'candidate' ? <Text color="yellow">你是候補者，等待下一局</Text> : null}
             {readyButton}
             {startButtons}
