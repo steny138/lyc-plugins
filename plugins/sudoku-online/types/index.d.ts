@@ -52,6 +52,16 @@ export type Connection = {
 /** 開局可選的難度 */
 export type Difficulty = 'easy' | 'medium' | 'hard'
 
+/** 本機作答中的盤面；只在自己的 session，不送給共同服務 */
+export type Board = {
+  /** 這份盤面屬於哪一道題；共同服務換題（下一局）時據此重來 */
+  puzzle: string
+  /** 目前盤面（含題目），81 字元，`.` 為空格 */
+  cells: string
+  /** 選取中的格子索引；沒有選取為 null */
+  selected: number | null
+}
+
 /** 房主啟動的共同服務子程序 */
 export type Hosting =
   | { status: 'starting' }
@@ -66,6 +76,6 @@ export type Hosting =
 
 declare module 'claude-code' {
   interface PluginState {
-    'sudoku-online': { connection: Connection | null; hosting: Hosting | null }
+    'sudoku-online': { connection: Connection | null; hosting: Hosting | null; board: Board | null }
   }
 }

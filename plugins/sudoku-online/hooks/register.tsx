@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import { BLANK } from '../service/sudoku.ts'
-import type { Difficulty, Me, PlayerSummary, ServiceState } from '../types'
+import { BLANK, conflicts } from '../service/sudoku.ts'
+import type { Board, Difficulty, Me, PlayerSummary, ServiceState } from '../types'
 
 const PANE = 'sudoku-online'
 const TITLE = '數獨對戰'
@@ -28,6 +28,29 @@ const isBoxEdge = (n: number) => n === 2 || n === 5
 
 const connection = atom({ plugin: 'sudoku-online', key: 'connection' } as const, null)
 const hosting = atom({ plugin: 'sudoku-online', key: 'hosting' } as const, null)
+const board = atom({ plugin: 'sudoku-online', key: 'board' } as const, null)
+
+/** 本機盤面：屬於這道題就沿用，換了題（或還沒填過）就從題目重來 */
+const boardFor = (prev: Board | null, puzzle: string): Board =>
+  prev?.puzzle === puzzle ? prev : { puzzle, cells: puzzle, selected: null }
+
+/** 選取一格（題目格不能選） */
+const select = ($: EngineInterface, puzzle: string, i: number) =>
+  update($, board, prev => {
+    const current = boardFor(prev, puzzle)
+
+    return puzzle[i] === BLANK ? { ...current, selected: i } : current
+  })
+
+/** 在選取的格子填入數字；`BLANK` 為清除。沒有選取時不變 */
+const put = ($: EngineInterface, puzzle: string, value: string) =>
+  update($, board, prev => {
+    const current = boardFor(prev, puzzle)
+    if (current.selected === null) return current
+    const i = current.selected
+
+    return { ...current, cells: current.cells.slice(0, i) + value + current.cells.slice(i + 1) }
+  })
 
 /** 共同服務啟動時在 stdout 印出的第一行 */
 type Listening = { port: number; addresses: string[] }
@@ -328,8 +351,10 @@ export const register: Register = on => {
 
     // 進行中的參賽者看得到盤面；候補者沒有
     const puzzle = current.state?.phase === 'playing' && mine?.role === 'participant' ? current.state.puzzle : undefined
-    const board =
-      puzzle === undefined ? null : (
+    const local = puzzle === undefined ? null : boardFor(await read($, board), puzzle)
+    const clashing = local === null ? new Set<number>() : conflicts(local.cells)
+    const boardView =
+      puzzle === undefined || local === null ? null : (
         <Box flexDirection="column" marginTop={1}>
           <Text dimColor>{`難度：${LEVELS[current.state?.difficulty ?? 'easy'].label}`}</Text>
           {Array.from({ length: 9 }, (_, r) => (
@@ -337,16 +362,27 @@ export const register: Register = on => {
               <Box>
                 {Array.from({ length: 9 }, (_, c) => {
                   const i = r * 9 + c
+                  const value = local.cells[i] ?? BLANK
                   const cell =
                     puzzle[i] === BLANK ? (
-                      <Button key={`cell-${i}`} label="·" plain onPress={() => undefined} />
+                      <Button
+                        key={`cell-${i}`}
+                        label={value === BLANK ? '·' : value}
+                        plain
+                        onPress={() => void select($, puzzle, i)}
+                      />
                     ) : (
-                      <Text bold>{puzzle[i]}</Text>
+                      <Text bold color={clashing.has(i) ? 'red' : undefined}>
+                        {puzzle[i]}
+                      </Text>
                     )
+                  // 衝突優先於選取
+                  const background =
+                    puzzle[i] === BLANK && clashing.has(i) ? 'red' : local.selected === i ? 'blue' : undefined
 
                   return (
                     <Box key={`col-${i}`}>
-                      {cell}
+                      {background ? <Box backgroundColor={background}>{cell}</Box> : cell}
                       {isBoxEdge(c) ? <Text dimColor>{' │ '}</Text> : c < 8 ? <Text> </Text> : null}
                     </Box>
                   )
@@ -355,6 +391,18 @@ export const register: Register = on => {
               {isBoxEdge(r) ? <Text dimColor>{`${'─'.repeat(6)}┼${'─'.repeat(7)}┼${'─'.repeat(6)}`}</Text> : null}
             </Box>
           ))}
+          <Box flexDirection="column" marginTop={1}>
+            {[0, 1, 2].map(r => (
+              <Box key={`keys-${r}`} gap={1}>
+                {[1, 2, 3].map(c => {
+                  const d = String(r * 3 + c)
+
+                  return <Button key={`digit-${d}`} label={d} hotkey={d} onPress={() => void put($, puzzle, d)} />
+                })}
+              </Box>
+            ))}
+            <Button key="clear" label="清除" hotkey="x" onPress={() => void put($, puzzle, BLANK)} />
+          </Box>
         </Box>
       )
 
@@ -404,7 +452,7 @@ export const register: Register = on => {
               <Text bold color="yellow">{`倒數 ${Math.ceil((current.state.startsInMs ?? 0) / 1000)} 秒`}</Text>
             ) : null}
             {current.actionError ? <Text color="red">{current.actionError}</Text> : null}
-            {board}
+            {boardView}
             {current.state === null ? (
               <Text dimColor>讀取中…</Text>
             ) : (

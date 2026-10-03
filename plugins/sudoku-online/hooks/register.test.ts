@@ -328,6 +328,61 @@ describe('公開題目', () => {
   })
 })
 
+/** 房主自己開一局簡單題並等倒數結束，回傳面板、核心、時鐘與第一個空格 */
+const playAsHost = async ($: Engine, on: On) => {
+  const hosted = await hostAs($, on)
+  await hosted.ui.press({ key: 'start-easy' })
+  await hosted.clock.advance(5000)
+  const first = (await cellButtons(hosted.ui))[0]!.key!
+
+  return { ...hosted, first }
+}
+
+/** 面板上某一格目前顯示的文字 */
+const cellLabel = async (ui: Awaited<ReturnType<typeof mountPane>>, key: string) => {
+  const el = await ui.find({ type: 'Button', key })
+
+  return el?.type === 'Button' ? el.text : undefined
+}
+
+describe('本機填答', () => {
+  test('選一個空格、按數字就填入，按清除恢復空白', async ($, on) => {
+    const { ui, first } = await playAsHost($, on)
+
+    await ui.press({ key: first })
+    await ui.press({ key: 'digit-5' })
+    expect(await cellLabel(ui, first)).toBe('5')
+
+    await ui.press({ key: 'clear' })
+    expect(await cellLabel(ui, first)).toBe('·')
+  })
+
+  test('填入和同列題目重複的數字時，該格標紅', async ($, on) => {
+    const { ui, service, clock, first } = await playAsHost($, on)
+    const puzzle = publicState(service(), clock.now()).puzzle!
+    const i = Number(first.slice('cell-'.length))
+    const row = Math.floor(i / 9)
+    // 同一列裡任一個題目數字，填進這格一定衝突
+    const clash = [...puzzle.slice(row * 9, row * 9 + 9)].find(ch => ch !== '.')!
+
+    await ui.press({ key: first })
+    await ui.press({ key: `digit-${clash}` })
+
+    const redBoxes = (await ui.findAll({ type: 'Box' })).filter(el => el.props.backgroundColor === 'red')
+    expect(redBoxes.length).toBeGreaterThan(0)
+  })
+
+  test('本機填答不會改到共同服務的題目', async ($, on) => {
+    const { ui, service, clock, first } = await playAsHost($, on)
+    const before = publicState(service(), clock.now()).puzzle
+
+    await ui.press({ key: first })
+    await ui.press({ key: 'digit-5' })
+
+    expect(publicState(service(), clock.now()).puzzle).toBe(before)
+  })
+})
+
 describe('開局後加入', () => {
   test('倒數期間加入的玩家是候補者', async ($, on) => {
     stubEngine(on)
