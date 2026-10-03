@@ -276,6 +276,58 @@ describe('移出本局', () => {
   })
 })
 
+/** 共同服務公開的狀態（直接讀核心，等於任何一個客戶端看到的） */
+const publicState = (service: Service, now: number) =>
+  JSON.parse(service.handle({ method: 'GET', path: '/state' }, now).text) as {
+    phase: string
+    difficulty?: string
+    puzzle?: string
+  }
+
+/** 面板上可以點的格子（空格） */
+const cellButtons = async (ui: Awaited<ReturnType<typeof mountPane>>) =>
+  (await ui.findAll({ type: 'Button' })).filter(el => el.key?.startsWith('cell-'))
+
+describe('公開題目', () => {
+  test('倒數期間共同服務不公開題目；倒數結束後參賽者拿到同一道簡單題，面板出現盤面', async ($, on) => {
+    const { clock, ui, service } = await hostAs($, on)
+    await ui.press({ key: 'start-easy' })
+
+    expect(publicState(service(), clock.now()).puzzle).toBeUndefined()
+    expect(await cellButtons(ui)).toHaveLength(0)
+
+    await clock.advance(5000)
+
+    const revealed = publicState(service(), clock.now())
+    expect(revealed.phase).toBe('playing')
+    expect(revealed.difficulty).toBe('easy')
+    expect(revealed.puzzle).toHaveLength(81)
+    // 簡單題 44 個提示，剩下 37 格是可以點的空格，與共同服務公開的題目一致
+    const blanks = [...(revealed.puzzle ?? '')].flatMap((ch, i) => (ch === '.' ? [`cell-${i}`] : []))
+    expect(blanks).toHaveLength(81 - 44)
+    expect((await cellButtons(ui)).map(el => el.key)).toEqual(blanks)
+  })
+
+  test('候補者在倒數結束後沒有盤面', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    const service = createService('instance-1', { newCredential: credentials(), hostKey: 'key' })
+    const host = (JSON.parse(postAs(service, '/join', { nickname: 'Host', hostKey: 'key' }).text) as { credential: string })
+      .credential
+    postAs(service, '/start', { credential: host, difficulty: 'easy' }, clock.now())
+    routeFetch(on, service, { isDown: false }, clock)
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+    await ui.input({ key: 'nickname', text: 'Late' })
+
+    await clock.advance(5000)
+
+    expect(publicState(service, clock.now()).phase).toBe('playing')
+    expect(await cellButtons(ui)).toHaveLength(0)
+    expect(await ui.find({ type: 'Text', text: '你是候補者，等待下一局' })).toBeDefined()
+  })
+})
+
 describe('開局後加入', () => {
   test('倒數期間加入的玩家是候補者', async ($, on) => {
     stubEngine(on)

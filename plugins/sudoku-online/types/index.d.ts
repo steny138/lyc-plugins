@@ -15,6 +15,10 @@ export type ServiceState = {
   phase: 'lobby' | 'countdown' | 'playing'
   /** 倒數時距離正式開始還有幾毫秒（以共同服務的時間計） */
   startsInMs?: number
+  /** 進行中才有：本局難度 */
+  difficulty?: Difficulty
+  /** 進行中才有：本局題目，81 字元，`.` 為空格 */
+  puzzle?: string
   players: PlayerSummary[]
 }
 

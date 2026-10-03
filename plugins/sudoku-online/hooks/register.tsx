@@ -1,6 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
+import { BLANK } from '../service/sudoku.ts'
 import type { Difficulty, Me, PlayerSummary, ServiceState } from '../types'
 
 const PANE = 'sudoku-online'
@@ -21,6 +22,9 @@ const LEVELS: Record<Difficulty, { label: string; hotkey: string }> = {
   hard: { label: '困難', hotkey: 'h' },
 }
 const DIFFICULTIES = Object.keys(LEVELS) as Difficulty[]
+
+/** 第 n 列（或行）之後是宮與宮的邊界 */
+const isBoxEdge = (n: number) => n === 2 || n === 5
 
 const connection = atom({ plugin: 'sudoku-online', key: 'connection' } as const, null)
 const hosting = atom({ plugin: 'sudoku-online', key: 'hosting' } as const, null)
@@ -322,6 +326,38 @@ export const register: Register = on => {
     const canRemove = (player: PlayerSummary) =>
       me?.isHost === true && current.state?.phase === 'lobby' && !player.isHost && !player.isReady
 
+    // 進行中的參賽者看得到盤面；候補者沒有
+    const puzzle = current.state?.phase === 'playing' && mine?.role === 'participant' ? current.state.puzzle : undefined
+    const board =
+      puzzle === undefined ? null : (
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>{`難度：${LEVELS[current.state?.difficulty ?? 'easy'].label}`}</Text>
+          {Array.from({ length: 9 }, (_, r) => (
+            <Box key={`row-${r}`} flexDirection="column">
+              <Box>
+                {Array.from({ length: 9 }, (_, c) => {
+                  const i = r * 9 + c
+                  const cell =
+                    puzzle[i] === BLANK ? (
+                      <Button key={`cell-${i}`} label="·" plain onPress={() => undefined} />
+                    ) : (
+                      <Text bold>{puzzle[i]}</Text>
+                    )
+
+                  return (
+                    <Box key={`col-${i}`}>
+                      {cell}
+                      {isBoxEdge(c) ? <Text dimColor>{' │ '}</Text> : c < 8 ? <Text> </Text> : null}
+                    </Box>
+                  )
+                })}
+              </Box>
+              {isBoxEdge(r) ? <Text dimColor>{`${'─'.repeat(6)}┼${'─'.repeat(7)}┼${'─'.repeat(6)}`}</Text> : null}
+            </Box>
+          ))}
+        </Box>
+      )
+
     // 大廳階段的房主才有開局按鈕，一個難度一個
     const startButtons =
       me?.isHost && current.state?.phase === 'lobby' ? (
@@ -368,6 +404,7 @@ export const register: Register = on => {
               <Text bold color="yellow">{`倒數 ${Math.ceil((current.state.startsInMs ?? 0) / 1000)} 秒`}</Text>
             ) : null}
             {current.actionError ? <Text color="red">{current.actionError}</Text> : null}
+            {board}
             {current.state === null ? (
               <Text dimColor>讀取中…</Text>
             ) : (

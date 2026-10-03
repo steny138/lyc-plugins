@@ -3,6 +3,8 @@
  * Node 外殼（server.ts）與引擎測試都把請求交給同一份 `handle`；需要時間的地方由呼叫端傳入 `now`。
  */
 
+import { generate } from './sudoku.ts'
+
 export type Request = { method: string; path: string; body?: string }
 export type Response = { status: number; text: string }
 export type Service = { handle: (request: Request, now?: number) => Response }
@@ -23,9 +25,10 @@ type Player = { credential: string; nickname: string; isHost: boolean; isReady: 
 /** 本局進行到哪裡：等待準備、倒數、進行中 */
 type Phase = 'lobby' | 'countdown' | 'playing'
 
-/** 開局可選的難度 */
-const DIFFICULTIES = ['easy', 'medium', 'hard'] as const
-type Difficulty = (typeof DIFFICULTIES)[number]
+/** 開局可選的難度與題目提示數（沿用 sudoku：44／35／26） */
+const CLUES = { easy: 44, medium: 35, hard: 26 } as const
+type Difficulty = keyof typeof CLUES
+const DIFFICULTIES = Object.keys(CLUES) as Difficulty[]
 
 /** 暱稱長度上限，為了面板名單排版 */
 const MAX_NICKNAME = 12
@@ -50,8 +53,8 @@ const identity = ({ credential, nickname, isHost }: Player) => ({ credential, ni
 
 export const createService = (instanceId: string, { newCredential, hostKey = '' }: ServiceOptions): Service => {
   const players: Player[] = []
-  /** 本局：開局前為 null；開局後記下難度與正式開始的時間 */
-  let round: { difficulty: Difficulty; startsAt: number } | null = null
+  /** 本局：開局前為 null；開局後記下難度、題目、答案與正式開始的時間 */
+  let round: { difficulty: Difficulty; puzzle: string; solution: string; startsAt: number } | null = null
 
   /** 依現在時間判斷本局階段；倒數時間到就算進行中 */
   const phaseAt = (now: number): Phase => (round === null ? 'lobby' : now < round.startsAt ? 'countdown' : 'playing')
@@ -110,8 +113,9 @@ export const createService = (instanceId: string, { newCredential, hostKey = '' 
     if (!difficulty) return json(400, { error: '請選擇難度' })
     const notReady = players.filter(p => p.role === 'participant' && !p.isHost && !p.isReady)
     if (notReady.length > 0) return json(409, { error: `還有玩家沒準備：${notReady.map(p => p.nickname).join('、')}` })
-    // 從這一刻起參賽名單固定
-    round = { difficulty, startsAt: now + COUNTDOWN_MS }
+    // 從這一刻起參賽名單固定；題目現在就出好，但倒數結束前不公開
+    const { puzzle, solution } = generate(CLUES[difficulty])
+    round = { difficulty, puzzle, solution, startsAt: now + COUNTDOWN_MS }
 
     return json(200, { startsInMs: COUNTDOWN_MS })
   }
@@ -137,6 +141,8 @@ export const createService = (instanceId: string, { newCredential, hostKey = '' 
       instanceId,
       phase,
       ...(round && phase === 'countdown' ? { startsInMs: round.startsAt - now } : {}),
+      // 題目只在正式開始後公開（spec「公開題目」）
+      ...(round && phase === 'playing' ? { difficulty: round.difficulty, puzzle: round.puzzle } : {}),
       players: players.map(({ nickname, isHost, isReady, role }) => ({ nickname, isHost, isReady, role })),
     }
   }
