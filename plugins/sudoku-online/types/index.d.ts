@@ -1,18 +1,22 @@
+/** 本局進行到哪裡：lobby 等待準備、countdown 倒數、playing 進行中 */
+export type Phase = 'lobby' | 'countdown' | 'playing'
+
+/** participant：本局參賽者；candidate：候補者，等下一局 */
+export type Role = 'participant' | 'candidate'
+
 /** 名單上的一位玩家（公開資訊，不含玩家憑證） */
 export type PlayerSummary = {
   nickname: string
   isHost: boolean
   isReady: boolean
-  /** participant：本局參賽者；candidate：候補者，等下一局 */
-  role: 'participant' | 'candidate'
+  role: Role
 }
 
 /** 共同服務 `GET /state` 回傳的狀態 */
 export type ServiceState = {
   /** 共同服務實例識別碼；每次啟動都不同 */
   instanceId: string
-  /** 本局進行到哪裡；lobby：等待準備、countdown：倒數、playing：進行中 */
-  phase: 'lobby' | 'countdown' | 'playing'
+  phase: Phase
   /** 倒數時距離正式開始還有幾毫秒（以共同服務的時間計） */
   startsInMs?: number
   /** 進行中才有：本局難度 */
@@ -45,7 +49,7 @@ export type Connection = {
   me: Me | null
   /** 共同服務拒絕加入的原因（例如暱稱不合規）；沒有被拒絕為 null */
   joinError: string | null
-  /** 共同服務拒絕最近一次操作（開局、移出）的原因；沒有被拒絕為 null */
+  /** 共同服務拒絕最近一次操作（準備、開局、移出）的原因；沒有被拒絕為 null */
   actionError: string | null
 }
 

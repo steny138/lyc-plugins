@@ -3,6 +3,7 @@
  * Node 外殼（server.ts）與引擎測試都把請求交給同一份 `handle`；需要時間的地方由呼叫端傳入 `now`。
  */
 
+import type { Difficulty, Phase, Role } from '../types'
 import { generate } from './sudoku.ts'
 
 export type Request = { method: string; path: string; body?: string }
@@ -14,20 +15,15 @@ export type ServiceOptions = {
   newCredential: () => string
   /** 房主密鑰：加入時帶上相同密鑰的人是房主；空字串表示沒有人能成為房主 */
   hostKey?: string
+  /** 出題用的亂數；預設 Math.random，測試傳固定種子讓題目可以重現 */
+  random?: () => number
 }
-
-/** 參賽者在本局有名額；候補者等下一局 */
-type Role = 'participant' | 'candidate'
 
 /** 共同服務記得的一位玩家；credential 只回給本人，不出現在公開狀態 */
 type Player = { credential: string; nickname: string; isHost: boolean; isReady: boolean; role: Role }
 
-/** 本局進行到哪裡：等待準備、倒數、進行中 */
-type Phase = 'lobby' | 'countdown' | 'playing'
-
-/** 開局可選的難度與題目提示數（沿用 sudoku：44／35／26） */
-const CLUES = { easy: 44, medium: 35, hard: 26 } as const
-type Difficulty = keyof typeof CLUES
+/** 各難度的題目提示數（沿用 sudoku：44／35／26） */
+const CLUES: Record<Difficulty, number> = { easy: 44, medium: 35, hard: 26 }
 const DIFFICULTIES = Object.keys(CLUES) as Difficulty[]
 
 /** 暱稱長度上限，為了面板名單排版 */
@@ -51,7 +47,10 @@ const parseBody = (body: string | undefined): Record<string, unknown> => {
 /** 回給本人的身分 */
 const identity = ({ credential, nickname, isHost }: Player) => ({ credential, nickname, isHost })
 
-export const createService = (instanceId: string, { newCredential, hostKey = '' }: ServiceOptions): Service => {
+export const createService = (
+  instanceId: string,
+  { newCredential, hostKey = '', random = Math.random }: ServiceOptions,
+): Service => {
   const players: Player[] = []
   /** 本局：開局前為 null；開局後記下難度、題目、答案與正式開始的時間 */
   let round: { difficulty: Difficulty; puzzle: string; solution: string; startsAt: number } | null = null
@@ -61,6 +60,9 @@ export const createService = (instanceId: string, { newCredential, hostKey = '' 
 
   /** 依玩家憑證找人；找不到為 undefined */
   const byCredential = (credential: unknown) => players.find(player => player.credential === credential)
+
+  /** 這個玩家憑證是不是房主的；房主操作（開局、移出）都要先過這一關 */
+  const isHost = (credential: unknown) => byCredential(credential)?.isHost === true
 
   /** 和別人重複時依序加上 #2、#3…，直到沒有人用 */
   const uniqueNickname = (wanted: string) => {
@@ -106,15 +108,14 @@ export const createService = (instanceId: string, { newCredential, hostKey = '' 
 
   /** 房主選難度開局：除了房主以外的參賽者都要已準備 */
   const start = (body: Record<string, unknown>, now: number): Response => {
-    const player = byCredential(body.credential)
-    if (!player?.isHost) return json(403, { error: '只有房主可以開局' })
+    if (!isHost(body.credential)) return json(403, { error: '只有房主可以開局' })
     if (phaseAt(now) !== 'lobby') return json(409, { error: '本局已經開始' })
     const difficulty = DIFFICULTIES.find(d => d === body.difficulty)
     if (!difficulty) return json(400, { error: '請選擇難度' })
     const notReady = players.filter(p => p.role === 'participant' && !p.isHost && !p.isReady)
     if (notReady.length > 0) return json(409, { error: `還有玩家沒準備：${notReady.map(p => p.nickname).join('、')}` })
     // 從這一刻起參賽名單固定；題目現在就出好，但倒數結束前不公開
-    const { puzzle, solution } = generate(CLUES[difficulty])
+    const { puzzle, solution } = generate(CLUES[difficulty], random)
     round = { difficulty, puzzle, solution, startsAt: now + COUNTDOWN_MS }
 
     return json(200, { startsInMs: COUNTDOWN_MS })
@@ -122,8 +123,7 @@ export const createService = (instanceId: string, { newCredential, hostKey = '' 
 
   /** 房主把大廳中未準備的參賽者移出本局，讓他成為候補者 */
   const remove = (body: Record<string, unknown>, now: number): Response => {
-    const player = byCredential(body.credential)
-    if (!player?.isHost) return json(403, { error: '只有房主可以移出玩家' })
+    if (!isHost(body.credential)) return json(403, { error: '只有房主可以移出玩家' })
     const target = players.find(p => p.nickname === body.nickname)
     if (phaseAt(now) !== 'lobby' || !target || target.isHost || target.role !== 'participant' || target.isReady) {
       return json(409, { error: '只能移出還沒準備的參賽者' })

@@ -85,24 +85,57 @@ const refresh = async ($: EngineInterface, url: string) => {
 const isPaneVisible = async ($: EngineInterface): Promise<boolean> =>
   (await $.ui.panes()).some(pane => pane.id === PANE && pane.isPlaced && pane.isShown)
 
-/** 以暱稱加入共同服務，存下共同服務發給的身分，再讀回名單；連不上時由 refresh 標記中斷 */
+/** 解析 JSON；讀不懂為 null */
+const parseOrNull = (text: string): unknown => {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 送出結果：成功帶解析後的回應（讀不懂為 null），被拒絕帶共同服務給的原因；
+ * 連不上、或被拒絕時回應讀不懂為 null
+ */
+type Sent = { ok: true; value: unknown } | { ok: false; error: string } | null
+
+/** 對共同服務送出 POST；被拒絕時取出它給的原因，沒有就用 fallback */
+const send = async (
+  $: EngineInterface,
+  url: string,
+  path: string,
+  body: Record<string, unknown>,
+  fallback: string,
+): Promise<Sent> => {
+  try {
+    const response = await $.http.fetch(`${url}${path}`, { method: 'POST', body: JSON.stringify(body) })
+    // 成功就算數；回應讀不懂只影響需要內容的呼叫端（加入）
+    if (response.ok) return { ok: true, value: parseOrNull(response.text) }
+    const { error } = JSON.parse(response.text) as { error?: string }
+
+    return { ok: false, error: error ?? fallback }
+  } catch {
+    // 連不上或回應讀不懂：呼叫端接著 refresh，由它標記中斷
+    return null
+  }
+}
+
+/** 以暱稱加入共同服務，存下共同服務發給的身分，再讀回名單 */
 const joinWithNickname = async ($: EngineInterface, url: string, nickname: string) => {
   // 房主連自己啟動的共同服務時帶上房主密鑰，取得房主身分
   const hosted = await read($, hosting)
   const hostKey = hosted?.status === 'running' && hosted.localUrl === url ? hosted.hostKey : undefined
-  try {
-    const response = await $.http.fetch(`${url}/join`, { method: 'POST', body: JSON.stringify({ nickname, hostKey }) })
-    if (response.ok) {
-      const me = JSON.parse(response.text) as Me
+  const sent = await send($, url, '/join', { nickname, hostKey }, '加入失敗')
+  if (sent?.ok) {
+    // 回應讀不懂就不寫回身分，交給 refresh
+    if (sent.value !== null) {
+      const me = sent.value as Me
       await update($, connection, prev => (prev?.url === url ? { ...prev, me, joinError: null } : prev))
-    } else {
-      // 共同服務是暱稱規則的唯一依據：直接顯示它給的原因
-      const { error } = JSON.parse(response.text) as { error?: string }
-      const joinError = error ?? '加入失敗'
-      await update($, connection, prev => (prev?.url === url ? { ...prev, joinError } : prev))
     }
-  } catch {
-    // 連不上：下面的 refresh 會標記中斷
+  } else if (sent) {
+    // 共同服務是暱稱規則的唯一依據：直接顯示它給的原因
+    await update($, connection, prev => (prev?.url === url ? { ...prev, joinError: sent.error } : prev))
   }
   await refresh($, url)
 }
@@ -130,27 +163,15 @@ const resume = async ($: EngineInterface) => {
   startPolling($, current.url)
 }
 
-/** 表示準備或取消準備，再讀回名單；連不上時由 refresh 標記中斷 */
-const setReady = async ($: EngineInterface, url: string, credential: string, isReady: boolean) => {
-  try {
-    await $.http.fetch(`${url}/ready`, { method: 'POST', body: JSON.stringify({ credential, isReady }) })
-  } catch {
-    // 連不上：下面的 refresh 會標記中斷
-  }
-  await refresh($, url)
-}
-
 /**
- * 送出需要身分的操作（開局、移出），再讀回狀態。
+ * 以玩家身分送出操作（準備、開局、移出），再讀回狀態。
  * 共同服務拒絕時把原因存進 actionError 顯示在面板；成功就清掉。
  */
-const act = async ($: EngineInterface, url: string, path: string, body: Record<string, unknown>) => {
-  try {
-    const response = await $.http.fetch(`${url}${path}`, { method: 'POST', body: JSON.stringify(body) })
-    const actionError = response.ok ? null : ((JSON.parse(response.text) as { error?: string }).error ?? '操作失敗')
+const postAsPlayer = async ($: EngineInterface, url: string, path: string, body: Record<string, unknown>) => {
+  const sent = await send($, url, path, body, '操作失敗')
+  if (sent) {
+    const actionError = sent.ok ? null : sent.error
     await update($, connection, prev => (prev?.url === url ? { ...prev, actionError } : prev))
-  } catch {
-    // 連不上：下面的 refresh 會標記中斷
   }
   await refresh($, url)
 }
@@ -336,16 +357,16 @@ export const register: Register = on => {
     }
 
     // 大廳階段、非房主的參賽者才有準備按鈕；房主按開局就算準備
-    const mine = current.state?.players.find(player => player.nickname === current.me?.nickname)
     const me = current.me
+    const myEntry = current.state?.players.find(player => player.nickname === me?.nickname)
     const readyButton =
-      me && !me.isHost && mine?.role === 'participant' && current.state?.phase === 'lobby' ? (
+      me && !me.isHost && myEntry?.role === 'participant' && current.state?.phase === 'lobby' ? (
         <Box marginTop={1}>
           <Button
             key="ready"
-            label={mine.isReady ? '取消準備' : '準備'}
+            label={myEntry.isReady ? '取消準備' : '準備'}
             hotkey="r"
-            onPress={() => void setReady($, current.url, me.credential, !mine.isReady)}
+            onPress={() => void postAsPlayer($, current.url, '/ready', { credential: me.credential, isReady: !myEntry.isReady })}
           />
         </Box>
       ) : null
@@ -357,13 +378,13 @@ export const register: Register = on => {
       me?.isHost === true && current.state?.phase === 'lobby' && !player.isHost && !player.isReady
 
     // 進行中的參賽者看得到盤面；候補者沒有
-    const puzzle = current.state?.phase === 'playing' && mine?.role === 'participant' ? current.state.puzzle : undefined
+    const puzzle = current.state?.phase === 'playing' && myEntry?.role === 'participant' ? current.state.puzzle : undefined
     const local = puzzle === undefined ? null : boardFor(await read($, board), puzzle)
     const clashing = local === null ? new Set<number>() : conflicts(local.cells)
     const boardView =
       puzzle === undefined || local === null ? null : (
         <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>{`難度：${LEVELS[current.state?.difficulty ?? 'easy'].label}`}</Text>
+          {current.state?.difficulty ? <Text dimColor>{`難度：${LEVELS[current.state.difficulty].label}`}</Text> : null}
           {Array.from({ length: 9 }, (_, r) => (
             <Box key={`row-${r}`} flexDirection="column">
               <Box>
@@ -422,7 +443,7 @@ export const register: Register = on => {
               key={`start-${difficulty}`}
               label={`開局：${LEVELS[difficulty].label}`}
               hotkey={LEVELS[difficulty].hotkey}
-              onPress={() => void act($, current.url, '/start', { credential: me.credential, difficulty })}
+              onPress={() => void postAsPlayer($, current.url, '/start', { credential: me.credential, difficulty })}
             />
           ))}
         </Box>
@@ -437,9 +458,9 @@ export const register: Register = on => {
           <Text color="red">原局已失效，請重新加入</Text>
         ) : (
           <Box flexDirection="column" marginTop={1}>
-            {current.me === null && Input === null ? (
+            {me === null && Input === null ? (
               <Text dimColor>請在電腦上的 Claude Code 輸入暱稱加入</Text>
-            ) : current.me === null && Input !== null ? (
+            ) : me === null && Input !== null ? (
               <Input
                 key="nickname"
                 label="暱稱："
@@ -449,11 +470,11 @@ export const register: Register = on => {
                 onSubmit={(value: string) => void joinWithNickname($, current.url, value)}
               />
             ) : (
-              <Text bold>{`你是 ${current.me?.nickname ?? ''}${current.me?.isHost ? HOST_MARK : ''}`}</Text>
+              <Text bold>{`你是 ${me?.nickname ?? ''}${me?.isHost ? HOST_MARK : ''}`}</Text>
             )}
-            {current.me === null && current.joinError ? <Text color="red">{current.joinError}</Text> : null}
+            {me === null && current.joinError ? <Text color="red">{current.joinError}</Text> : null}
             {current.state ? <Text dimColor>{PHASE_LABELS[current.state.phase]}</Text> : null}
-            {mine?.role === 'candidate' ? <Text color="yellow">你是候補者，等待下一局</Text> : null}
+            {myEntry?.role === 'candidate' ? <Text color="yellow">你是候補者，等待下一局</Text> : null}
             {readyButton}
             {startButtons}
             {current.state?.phase === 'countdown' ? (
@@ -475,7 +496,7 @@ export const register: Register = on => {
                         label="移出"
                         plain
                         onPress={() =>
-                          void act($, current.url, '/remove', { credential: me.credential, nickname: player.nickname })
+                          void postAsPlayer($, current.url, '/remove', { credential: me.credential, nickname: player.nickname })
                         }
                       />
                     ) : null}

@@ -410,6 +410,30 @@ describe('本局狀態', () => {
   })
 })
 
+/** 固定種子的亂數（mulberry32），讓出題可以重現 */
+const seeded = (seed: number) => () => {
+  seed = (seed + 0x6d2b79f5) | 0
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+}
+
+describe('出題亂數', () => {
+  test('注入同一個固定種子的亂數時，兩個共同服務開出同一道題', () => {
+    const puzzleWith = (seed: number) => {
+      const service = createService('instance-1', { newCredential: credentials(), hostKey: 'key', random: seeded(seed) })
+      const host = (JSON.parse(postAs(service, '/join', { nickname: 'Host', hostKey: 'key' }).text) as { credential: string })
+        .credential
+      postAs(service, '/start', { credential: host, difficulty: 'hard' }, 0)
+
+      return publicState(service, 5000).puzzle
+    }
+
+    expect(puzzleWith(7)).toBe(puzzleWith(7))
+  })
+})
+
 describe('同一道題', () => {
   test('房主與 Bob 都是參賽者時，兩人在正式開始後讀到同一道題，Bob 的面板盤面也是這道題', async ($, on) => {
     stubEngine(on)
