@@ -127,6 +127,33 @@ describe('加入與暱稱', () => {
     expect(await ui.find({ type: 'Text', text: '・Alice' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '・Alice#2' })).toBeDefined()
   })
+
+  test('只有空白的暱稱被拒絕，顯示原因並停在輸入框', async ($, on) => {
+    stubEngine(on)
+    routeFetch(on, newService())
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+
+    await ui.input({ key: 'nickname', text: '   ' })
+
+    expect(await ui.find({ type: 'Text', text: '請輸入暱稱' })).toBeDefined()
+    expect(await ui.find({ type: 'Input', key: 'nickname' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '玩家（0）' })).toBeDefined()
+  })
+
+  test('超過 12 個字的暱稱被拒絕，剛好 12 個字可以加入', async ($, on) => {
+    stubEngine(on)
+    routeFetch(on, newService())
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+
+    await ui.input({ key: 'nickname', text: '一二三四五六七八九十甲乙' + '丙' })
+    expect(await ui.find({ type: 'Text', text: '暱稱最多 12 個字' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '玩家（0）' })).toBeDefined()
+
+    await ui.input({ key: 'nickname', text: '一二三四五六七八九十甲乙' })
+    expect(await ui.find({ type: 'Text', text: '你是 一二三四五六七八九十甲乙' })).toBeDefined()
+  })
 })
 
 describe('連線共同服務', () => {

@@ -29,6 +29,8 @@ export type Connection = {
   isExpired: boolean
   /** 本機玩家的身分；還沒輸入暱稱加入為 null */
   me: Me | null
+  /** 共同服務拒絕加入的原因（例如暱稱不合規）；沒有被拒絕為 null */
+  joinError: string | null
 }
 
 /** 房主啟動的共同服務子程序 */

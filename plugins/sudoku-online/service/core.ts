@@ -15,6 +15,9 @@ export type ServiceOptions = {
 /** 共同服務記得的一位玩家；credential 只回給本人，不出現在公開狀態 */
 type Player = { credential: string; nickname: string; isHost: boolean }
 
+/** 暱稱長度上限，為了面板名單排版 */
+const MAX_NICKNAME = 12
+
 const json = (status: number, value: unknown): Response => ({ status, text: JSON.stringify(value) })
 
 /** 讀 JSON body；格式不對時當成空物件，交給各欄位的檢查處理 */
@@ -42,7 +45,10 @@ export const createService = (instanceId: string, { newCredential }: ServiceOpti
   }
 
   const join = (body: Record<string, unknown>): Response => {
-    const wanted = typeof body.nickname === 'string' ? body.nickname : ''
+    const wanted = typeof body.nickname === 'string' ? body.nickname.trim() : ''
+    if (wanted === '') return json(400, { error: '請輸入暱稱' })
+    // 以 Unicode 字元計算，中文一字算一個
+    if ([...wanted].length > MAX_NICKNAME) return json(400, { error: `暱稱最多 ${MAX_NICKNAME} 個字` })
     const player: Player = { credential: newCredential(), nickname: uniqueNickname(wanted), isHost: false }
     players.push(player)
 

@@ -45,7 +45,12 @@ const joinWithNickname = async ($: EngineInterface, url: string, nickname: strin
     const response = await $.http.fetch(`${url}/join`, { method: 'POST', body: JSON.stringify({ nickname }) })
     if (response.ok) {
       const me = JSON.parse(response.text) as Me
-      await update($, connection, prev => (prev?.url === url ? { ...prev, me } : prev))
+      await update($, connection, prev => (prev?.url === url ? { ...prev, me, joinError: null } : prev))
+    } else {
+      // 共同服務是暱稱規則的唯一依據：直接顯示它給的原因
+      const { error } = JSON.parse(response.text) as { error?: string }
+      const joinError = error ?? '加入失敗'
+      await update($, connection, prev => (prev?.url === url ? { ...prev, joinError } : prev))
     }
   } catch {
     // 連不上：下面的 refresh 會標記中斷
@@ -78,7 +83,7 @@ const resume = async ($: EngineInterface) => {
 
 /** 連上共同服務並開始輪詢 */
 const connect = async ($: EngineInterface, url: string) => {
-  await update($, connection, () => ({ url, state: null, isConnected: false, isExpired: false, me: null }))
+  await update($, connection, () => ({ url, state: null, isConnected: false, isExpired: false, me: null, joinError: null }))
   await refresh($, url)
   startPolling($, url)
 }
@@ -245,6 +250,7 @@ export const register: Register = on => {
             ) : (
               <Text bold>{`你是 ${current.me?.nickname ?? ''}`}</Text>
             )}
+            {current.me === null && current.joinError ? <Text color="red">{current.joinError}</Text> : null}
             {current.state === null ? (
               <Text dimColor>讀取中…</Text>
             ) : (
