@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Me, ServiceState } from '../types'
+import type { Difficulty, Me, ServiceState } from '../types'
 
 const PANE = 'sudoku-online'
 const TITLE = '數獨對戰'
@@ -13,6 +13,14 @@ const POLL_MS = 1000
 const HOST_MARK = '（房主）'
 /** 名單上已準備的標示 */
 const READY_MARK = '（已準備）'
+
+/** 各難度的名稱與開局快捷鍵；開局按鈕依這個順序排列 */
+const LEVELS: Record<Difficulty, { label: string; hotkey: string }> = {
+  easy: { label: '簡單', hotkey: 'e' },
+  medium: { label: '中等', hotkey: 'm' },
+  hard: { label: '困難', hotkey: 'h' },
+}
+const DIFFICULTIES = Object.keys(LEVELS) as Difficulty[]
 
 const connection = atom({ plugin: 'sudoku-online', key: 'connection' } as const, null)
 const hosting = atom({ plugin: 'sudoku-online', key: 'hosting' } as const, null)
@@ -98,6 +106,21 @@ const setReady = async ($: EngineInterface, url: string, credential: string, isR
   await refresh($, url)
 }
 
+/**
+ * 送出需要身分的操作（開局、移出），再讀回狀態。
+ * 共同服務拒絕時把原因存進 actionError 顯示在面板；成功就清掉。
+ */
+const act = async ($: EngineInterface, url: string, path: string, body: Record<string, unknown>) => {
+  try {
+    const response = await $.http.fetch(`${url}${path}`, { method: 'POST', body: JSON.stringify(body) })
+    const actionError = response.ok ? null : ((JSON.parse(response.text) as { error?: string }).error ?? '操作失敗')
+    await update($, connection, prev => (prev?.url === url ? { ...prev, actionError } : prev))
+  } catch {
+    // 連不上：下面的 refresh 會標記中斷
+  }
+  await refresh($, url)
+}
+
 /** 以存下的玩家憑證向共同服務確認身分；共同服務不認得（例如換了實例）就回 null */
 const confirmMe = async ($: EngineInterface, url: string, me: Me): Promise<Me | null> => {
   try {
@@ -118,7 +141,15 @@ const confirmMe = async ($: EngineInterface, url: string, me: Me): Promise<Me | 
 const connect = async ($: EngineInterface, url: string) => {
   const prev = await read($, connection)
   const me = prev?.url === url && prev.me && !prev.isExpired ? await confirmMe($, url, prev.me) : null
-  await update($, connection, () => ({ url, state: null, isConnected: false, isExpired: false, me, joinError: null }))
+  await update($, connection, () => ({
+    url,
+    state: null,
+    isConnected: false,
+    isExpired: false,
+    me,
+    joinError: null,
+    actionError: null,
+  }))
   await refresh($, url)
   startPolling($, url)
 }
@@ -285,6 +316,21 @@ export const register: Register = on => {
         </Box>
       ) : null
 
+    // 大廳階段的房主才有開局按鈕，一個難度一個
+    const startButtons =
+      me?.isHost && current.state?.phase === 'lobby' ? (
+        <Box marginTop={1} gap={1}>
+          {DIFFICULTIES.map(difficulty => (
+            <Button
+              key={`start-${difficulty}`}
+              label={`開局：${LEVELS[difficulty].label}`}
+              hotkey={LEVELS[difficulty].hotkey}
+              onPress={() => void act($, current.url, '/start', { credential: me.credential, difficulty })}
+            />
+          ))}
+        </Box>
+      ) : null
+
     return (
       <Box flexDirection="column" paddingTop={1} paddingLeft={2}>
         {hostLine}
@@ -310,6 +356,11 @@ export const register: Register = on => {
             )}
             {current.me === null && current.joinError ? <Text color="red">{current.joinError}</Text> : null}
             {readyButton}
+            {startButtons}
+            {current.state?.phase === 'countdown' ? (
+              <Text bold color="yellow">{`倒數 ${Math.ceil((current.state.startsInMs ?? 0) / 1000)} 秒`}</Text>
+            ) : null}
+            {current.actionError ? <Text color="red">{current.actionError}</Text> : null}
             {current.state === null ? (
               <Text dimColor>讀取中…</Text>
             ) : (

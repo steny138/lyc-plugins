@@ -46,13 +46,16 @@ const joinAs = (service: Service, nickname: string) =>
 /** 假網路：`isDown` 為 true 時所有請求都連不上；`requests` 累計送達的請求數 */
 type Network = { isDown: boolean; requests?: number }
 
-/** 把 `$.http.fetch` 導到同一份共同服務核心，代替真實網路 */
-const routeFetch = (on: On, service: Service, network: Network = { isDown: false }) =>
+/** mock.clock 回傳的時鐘（只用到的部分） */
+type Clock = { now: () => number; sleep: (ms: number) => Promise<void> }
+
+/** 把 `$.http.fetch` 導到同一份共同服務核心，代替真實網路；有時鐘時把它的時間交給共同服務 */
+const routeFetch = (on: On, service: Service, network: Network = { isDown: false }, clock?: Clock) =>
   on('http.fetch', (_$, e) => {
     network.requests = (network.requests ?? 0) + 1
     if (network.isDown) throw new Error('connect ECONNREFUSED')
     const path = e.url.replace(/^https?:\/\/[^/]+/, '') || '/'
-    const response = service.handle({ method: e.init?.method ?? 'GET', path, body: e.init?.body })
+    const response = service.handle({ method: e.init?.method ?? 'GET', path, body: e.init?.body }, clock?.now() ?? 0)
 
     return { value: { ...response, ok: response.status >= 200 && response.status < 300, headers: {} } }
   })
@@ -170,6 +173,68 @@ describe('準備', () => {
     await ui.press({ key: 'ready' })
     expect(await ui.find({ type: 'Text', text: '・Alice' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '・Alice（已準備）' })).toBeUndefined()
+  })
+})
+
+/** 另一位玩家對核心送出需要身分的請求 */
+const postAs = (service: Service, path: string, body: Record<string, unknown>, now = 0) =>
+  service.handle({ method: 'POST', path, body: JSON.stringify(body) }, now)
+
+/** 另一位玩家加入並回傳他的玩家憑證 */
+const credentialOf = (service: Service, nickname: string) =>
+  (JSON.parse(joinAs(service, nickname).text) as { credential: string }).credential
+
+/**
+ * 房主情境：一鍵啟動（假子程序把房主密鑰交給核心）、打開面板、以「Host」加入。
+ * 回傳時鐘、面板與核心；核心在 spawn 時才建立，所以用函式取得。
+ */
+const hostAs = async ($: Engine, on: On) => {
+  stubEngine(on)
+  const clock = mock.clock(on)
+  const holder: { service: Service | null } = { service: null }
+  routeFetch(on, { handle: (request, now) => holder.service!.handle(request, now) }, { isDown: false }, clock)
+  on('process.spawn', async function* (_$, e) {
+    holder.service = createService('instance-1', {
+      newCredential: credentials(),
+      hostKey: e.env?.SUDOKU_ONLINE_HOST_KEY ?? '',
+    })
+    yield { stream: 'stdout' as const, text: '{"port":47900,"addresses":["192.168.1.5"]}\n' }
+    await clock.sleep(24 * 60 * 60 * 1000)
+
+    return { value: { code: 0, signal: null } }
+  })
+  await run($, 'host')
+  await clock.settle()
+  const ui = await mountPane($)
+  await ui.input({ key: 'nickname', text: 'Host' })
+
+  return { clock, ui, service: () => holder.service! }
+}
+
+describe('開局與倒數', () => {
+  test('還有參賽者沒準備時，房主開局被拒絕並顯示是誰', async ($, on) => {
+    const { clock, ui, service } = await hostAs($, on)
+    joinAs(service(), 'Bob')
+    await clock.advance(1000)
+
+    await ui.press({ key: 'start-easy' })
+
+    expect(await ui.find({ type: 'Text', text: '還有玩家沒準備：Bob' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '倒數 5 秒' })).toBeUndefined()
+  })
+
+  test('全員準備後房主開局，面板開始倒數；不是房主的人不能開局', async ($, on) => {
+    const { clock, ui, service } = await hostAs($, on)
+    const bob = credentialOf(service(), 'Bob')
+    postAs(service(), '/ready', { credential: bob, isReady: true })
+    expect(postAs(service(), '/start', { credential: bob, difficulty: 'easy' }).status).toBe(403)
+    await clock.advance(1000)
+
+    await ui.press({ key: 'start-easy' })
+    expect(await ui.find({ type: 'Text', text: '倒數 5 秒' })).toBeDefined()
+
+    await clock.advance(1000)
+    expect(await ui.find({ type: 'Text', text: '倒數 4 秒' })).toBeDefined()
   })
 })
 

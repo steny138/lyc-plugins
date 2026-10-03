@@ -11,8 +11,10 @@ export type PlayerSummary = {
 export type ServiceState = {
   /** 共同服務實例識別碼；每次啟動都不同 */
   instanceId: string
-  /** 本局進行到哪裡；lobby：等待準備 */
-  phase: 'lobby'
+  /** 本局進行到哪裡；lobby：等待準備、countdown：倒數、playing：進行中 */
+  phase: 'lobby' | 'countdown' | 'playing'
+  /** 倒數時距離正式開始還有幾毫秒（以共同服務的時間計） */
+  startsInMs?: number
   players: PlayerSummary[]
 }
 
@@ -39,7 +41,12 @@ export type Connection = {
   me: Me | null
   /** 共同服務拒絕加入的原因（例如暱稱不合規）；沒有被拒絕為 null */
   joinError: string | null
+  /** 共同服務拒絕最近一次操作（開局、移出）的原因；沒有被拒絕為 null */
+  actionError: string | null
 }
+
+/** 開局可選的難度 */
+export type Difficulty = 'easy' | 'medium' | 'hard'
 
 /** 房主啟動的共同服務子程序 */
 export type Hosting =
