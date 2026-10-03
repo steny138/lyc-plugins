@@ -23,6 +23,8 @@ export type Hosting =
   /** shareUrls：給同區網玩家連線的位址；房主電腦有幾個區網 IPv4 就有幾個 */
   | { status: 'running'; shareUrls: string[] }
   | { status: 'failed'; reason: string }
+  /** 房主主動停止（例如關閉面板） */
+  | { status: 'stopped'; reason: string }
 
 declare module 'claude-code' {
   interface PluginState {

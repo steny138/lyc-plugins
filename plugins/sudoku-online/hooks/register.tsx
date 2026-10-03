@@ -58,6 +58,20 @@ const startPolling = ($: EngineInterface, url: string) => {
   poller = $.clock.every(POLL_MS, () => void refresh($, url))
 }
 
+/** 停止輪詢；面板關閉時呼叫 */
+const stopPolling = () => {
+  poller?.cancel()
+  poller = null
+}
+
+/** 已經加入過共同服務時，立刻讀一次最新狀態並恢復輪詢；面板打開或重載後呼叫 */
+const resume = async ($: EngineInterface) => {
+  const current = await read($, connection)
+  if (current === null) return
+  await refresh($, current.url)
+  startPolling($, current.url)
+}
+
 /** 連上共同服務並開始輪詢 */
 const connect = async ($: EngineInterface, url: string) => {
   await update($, connection, () => ({ url, state: null, isConnected: false, isExpired: false }))
@@ -65,17 +79,32 @@ const connect = async ($: EngineInterface, url: string) => {
   startPolling($, url)
 }
 
+/** 共同服務子程序的輸出串流；結束這個串流就會結束子程序 */
+let hostChild: AsyncGenerator<unknown, unknown> | null = null
+/** 房主主動停止共同服務的原因；子程序因此結束時用它代替失敗原因 */
+let stopReason: string | null = null
+
+/** 房主停止共同服務：結束串流，引擎隨之結束子程序 */
+const stopHosting = (reason: string) => {
+  if (hostChild === null) return
+  stopReason = reason
+  void hostChild.return(undefined)
+  hostChild = null
+}
+
 /**
  * 以 Node 子程序啟動共同服務。子程序活多久，這個迴圈就跑多久；
- * 模組卸載時引擎會結束子程序（ADR 0001）。
+ * 房主關閉面板或模組卸載時子程序結束（ADR 0001）。
  */
 const host = async ($: EngineInterface) => {
   await update($, hosting, () => ({ status: 'starting' as const }))
   let stdout = ''
   let stderr = ''
   let reason: string
+  stopReason = null
   try {
     const child = $.process.spawn({ argv: ['node', `${$.plugin.root}/service/server.ts`] })
+    hostChild = child
     for await (const { stream, text } of child) {
       if (stream === 'stderr') {
         stderr += text
@@ -95,7 +124,11 @@ const host = async ($: EngineInterface) => {
   } catch (error) {
     reason = error instanceof Error ? error.message : String(error)
   }
-  await update($, hosting, () => ({ status: 'failed' as const, reason }))
+  hostChild = null
+  const stopped = stopReason
+  await update($, hosting, () =>
+    stopped === null ? { status: 'failed' as const, reason } : { status: 'stopped' as const, reason: stopped },
+  )
 }
 
 export const register: Register = on => {
@@ -111,9 +144,8 @@ export const register: Register = on => {
         ? { status: 'failed' as const, reason: '模組重新載入，共同服務已中止' }
         : prev,
     )
-    // 輪詢計時器是模組變數，重載後就沒了；connection 還在就接著輪詢
-    const current = await read($, connection)
-    if (current) startPolling($, current.url)
+    // 輪詢計時器是模組變數，重載後就沒了；面板還看得到就接著輪詢
+    if (await isPaneVisible($)) await resume($)
 
     return next(e)
   })
@@ -138,9 +170,22 @@ export const register: Register = on => {
 
       return { text: '數獨對戰面板已關閉。' }
     }
+    await resume($)
     await $.ui.open(OPEN_ARGS)
 
     return { text: '數獨對戰面板已開啟。' }
+  })
+
+  // 按 ✕ 或再執行一次指令都會走到這裡；模組卸載（unload）時引擎不會呼叫這個 hook
+  on('ui.close', async ($, e, next) => {
+    const closed = await next(e)
+    if (e.id === PANE) {
+      stopPolling()
+      // 房主關閉面板就結束共同服務，本局隨之中止
+      stopHosting('房主關閉了面板')
+    }
+
+    return closed
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -156,6 +201,8 @@ export const register: Register = on => {
             <Text key={shareUrl} color="green">{`分享位址：${shareUrl}`}</Text>
           ))}
         </Box>
+      ) : hosted.status === 'stopped' ? (
+        <Text color="yellow">{`共同服務已停止：${hosted.reason}`}</Text>
       ) : (
         <Text color="red">{`共同服務啟動失敗：${hosted.reason}`}</Text>
       )

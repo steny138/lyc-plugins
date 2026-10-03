@@ -29,12 +29,13 @@ const stubEngine = (on: On) => {
   return env
 }
 
-/** 假網路：`isDown` 為 true 時所有請求都連不上 */
-type Network = { isDown: boolean }
+/** 假網路：`isDown` 為 true 時所有請求都連不上；`requests` 累計送達的請求數 */
+type Network = { isDown: boolean; requests?: number }
 
 /** 把 `$.http.fetch` 導到同一份共同服務核心，代替真實網路 */
 const routeFetch = (on: On, service: Service, network: Network = { isDown: false }) =>
   on('http.fetch', (_$, e) => {
+    network.requests = (network.requests ?? 0) + 1
     if (network.isDown) throw new Error('connect ECONNREFUSED')
     const path = e.url.replace(/^https?:\/\/[^/]+/, '') || '/'
     const response = service.handle({ method: e.init?.method ?? 'GET', path, body: e.init?.body })
@@ -93,6 +94,73 @@ describe('面板開關', () => {
     const { text } = await run($)
     expect(text).toContain('已關閉')
     expect(env.isOpen).toBe(false)
+  })
+})
+
+describe('面板關閉時斷開連線', () => {
+  test('玩家關閉面板後不再輪詢共同服務', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    const network: Network = { isDown: false }
+    routeFetch(on, createService('instance-1'), network)
+    await run($, 'join http://test:47900')
+
+    await run($) // 面板看得到，再執行一次就關閉
+    const before = network.requests
+    await clock.advance(5000)
+
+    expect(network.requests).toBe(before)
+  })
+
+  test('重新打開面板時立刻讀到最新狀態，之後繼續輪詢', async ($, on) => {
+    const env = stubEngine(on)
+    const clock = mock.clock(on)
+    const service = createService('instance-1')
+    routeFetch(on, service)
+    await run($, 'join http://test:47900')
+    await run($)
+
+    service.handle({ method: 'POST', path: '/bump' })
+    env.isOpen = false
+    await run($)
+    const ui = await mountPane($)
+    expect(await ui.find({ type: 'Text', text: '計數：1' })).toBeDefined()
+
+    service.handle({ method: 'POST', path: '/bump' })
+    await clock.advance(1000)
+    expect(await ui.find({ type: 'Text', text: '計數：2' })).toBeDefined()
+  })
+
+  test('房主關閉面板時結束共同服務子程序，重新打開顯示已停止', async ($, on) => {
+    const env = stubEngine(on)
+    const clock = mock.clock(on)
+    routeFetch(on, createService('instance-1'))
+    const child = { isRunning: false }
+    on('process.spawn', async function* (_$, _e, next) {
+      child.isRunning = true
+      try {
+        yield { stream: 'stdout' as const, text: '{"port":47900,"addresses":["192.168.1.5"]}\n' }
+        // 假子程序一直執行，直到引擎因為 plugin 離開串流而中止它
+        await new Promise<void>(resolve => next.signal.addEventListener('abort', () => resolve()))
+
+        return { value: { code: null, signal: 'SIGTERM' } }
+      } finally {
+        child.isRunning = false
+      }
+    })
+    await run($, 'host')
+    await clock.settle()
+    expect(child.isRunning).toBe(true)
+
+    await run($) // 面板看得到，再執行一次就關閉
+    await clock.settle()
+    expect(child.isRunning).toBe(false)
+
+    env.isOpen = false
+    await run($)
+    const ui = await mountPane($)
+    expect(await ui.find({ type: 'Text', text: '共同服務已停止：房主關閉了面板' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '分享位址：http://192.168.1.5:47900' })).toBeUndefined()
   })
 })
 
