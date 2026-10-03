@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { stubEngine, run, mountPane, board, place, SINGLE_STEPS, LONG_STEPS } from './test-support'
+import { stubEngine, run, mountPane, board, place, SINGLE_STEPS, LONG_STEPS, rasterCells } from './test-support'
 test('指令開啟自己的棋盤、下一塊與初始統計', async ($, on) => {
   stubEngine(on)
   mock.clock(on)
@@ -264,3 +264,18 @@ test('只處理自己的 Pane，被其他分頁蓋住時可再開', async ($, on
   expect(await ui.find({ type: 'Text', text: '另一個面板' })).toBeDefined()
 })
 
+test('同形 L 的活動四格有不同背景，暫停時仍與固定格可辨', async ($, on) => {
+  stubEngine(on); const clock = mock.clock(on); await clock.advance(2)
+  await run($); const ui = await mountPane($)
+  await ui.press({ key: 'drop' }); await clock.advance(400)
+  for (let i = 0; i < 4; i++) await ui.press({ key: 'down' })
+  const cells = await rasterCells(ui)
+  const active = cells.slice(0, 50).filter(cell => cell.char === 'L')
+  const fixed = cells.slice(50).filter(cell => cell.char === 'L')
+  expect(active).toHaveLength(4)
+  expect(fixed.length).toBeGreaterThan(0)
+  expect(active[0]!.background).not.toBe(fixed[0]!.background)
+  expect(active.every(cell => cell.background === active[0]!.background)).toBe(true)
+  await ui.press({ key: 'pause' }); await clock.advance(1000)
+  expect(await rasterCells(ui)).toEqual(cells)
+})
