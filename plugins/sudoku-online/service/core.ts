@@ -83,7 +83,8 @@ export const createService = (instanceId: string, { newCredential, hostKey = '' 
       nickname: uniqueNickname(wanted),
       isHost,
       isReady: false,
-      role: 'participant',
+      // 房主開局後（倒數或進行中）名單已固定，新加入的人等下一局
+      role: round === null ? 'participant' : 'candidate',
     }
     players.push(player)
 

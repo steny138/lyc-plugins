@@ -276,6 +276,25 @@ describe('移出本局', () => {
   })
 })
 
+describe('開局後加入', () => {
+  test('倒數期間加入的玩家是候補者', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    const service = createService('instance-1', { newCredential: credentials(), hostKey: 'key' })
+    const host = (JSON.parse(postAs(service, '/join', { nickname: 'Host', hostKey: 'key' }).text) as { credential: string })
+      .credential
+    postAs(service, '/start', { credential: host, difficulty: 'easy' }, clock.now())
+    routeFetch(on, service, { isDown: false }, clock)
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+
+    await ui.input({ key: 'nickname', text: 'Late' })
+
+    expect(await ui.find({ type: 'Text', text: '你是候補者，等待下一局' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '候補者（1）' })).toBeDefined()
+  })
+})
+
 describe('玩家憑證', () => {
   test('同一個 session 對同一個共同服務再加入一次，沿用原本的身分，不會多出一位玩家', async ($, on) => {
     stubEngine(on)
