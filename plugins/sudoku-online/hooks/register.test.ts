@@ -410,7 +410,50 @@ describe('本局狀態', () => {
   })
 })
 
+describe('同一道題', () => {
+  test('房主與 Bob 都是參賽者時，兩人在正式開始後讀到同一道題，Bob 的面板盤面也是這道題', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    const service = createService('instance-1', { newCredential: credentials(), hostKey: 'key' })
+    const host = (JSON.parse(postAs(service, '/join', { nickname: 'Host', hostKey: 'key' }).text) as { credential: string })
+      .credential
+    routeFetch(on, service, { isDown: false }, clock)
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+    await ui.input({ key: 'nickname', text: 'Bob' })
+    await ui.press({ key: 'ready' })
+
+    expect(postAs(service, '/start', { credential: host, difficulty: 'medium' }, clock.now()).status).toBe(200)
+    await clock.advance(5000)
+
+    const { puzzle, difficulty } = publicState(service, clock.now())
+    expect(difficulty).toBe('medium')
+    const blanks = [...(puzzle ?? '')].flatMap((ch, i) => (ch === '.' ? [`cell-${i}`] : []))
+    expect(blanks).toHaveLength(81 - 35)
+    expect((await cellButtons(ui)).map(el => el.key)).toEqual(blanks)
+  })
+})
+
 describe('開局後加入', () => {
+  test('進行中加入的玩家是候補者', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    const service = createService('instance-1', { newCredential: credentials(), hostKey: 'key' })
+    const host = (JSON.parse(postAs(service, '/join', { nickname: 'Host', hostKey: 'key' }).text) as { credential: string })
+      .credential
+    postAs(service, '/start', { credential: host, difficulty: 'easy' }, clock.now())
+    await clock.advance(5000)
+    expect(publicState(service, clock.now()).phase).toBe('playing')
+    routeFetch(on, service, { isDown: false }, clock)
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+
+    await ui.input({ key: 'nickname', text: 'Later' })
+
+    expect(await ui.find({ type: 'Text', text: '你是候補者，等待下一局' })).toBeDefined()
+    expect(await cellButtons(ui)).toHaveLength(0)
+  })
+
   test('倒數期間加入的玩家是候補者', async ($, on) => {
     stubEngine(on)
     const clock = mock.clock(on)
