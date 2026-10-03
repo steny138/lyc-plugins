@@ -25,3 +25,23 @@ export const newGame = (seed: number): Game => {
   const [next, rest, state] = draw(bag, random)
   return { block: spawn(first), next, bag: rest, random: state, board: {}, score: 0, lines: 0, level: 0 }
 }
+export type Move = 'left' | 'right' | 'down'
+const translate = (block: Block, dx: number, dy: number): Block => ({ ...block, origin: [block.origin[0] + dx, block.origin[1] + dy], extra: block.extra.map(([x, y]) => [x + dx, y + dy]) })
+const valid = (game: Game, block: Block) => coords(block).every(([x, y]) => x >= 1 && x <= 10 && y >= 1 && !game.board[`${x},${y}`])
+export const move = (game: Game, direction: Move): Game => {
+  const candidate = translate(game.block, direction === 'left' ? -1 : direction === 'right' ? 1 : 0, direction === 'down' ? -1 : 0)
+  return valid(game, candidate) ? { ...game, block: candidate } : game
+}
+const rotateRaw = (block: Block): Block => {
+  if (block.shape === 'O') return block
+  const [ox, oy] = block.origin
+  const clockwise = block.shape === 'I' && block.extra.some(([x, y]) => x === ox && y === oy + 1)
+  return { ...block, extra: block.extra.map(([x, y]) => clockwise ? [ox + y - oy, oy - x + ox] : [ox - y + oy, oy + x - ox]) }
+}
+export const rotate = (game: Game): Game => {
+  for (const dx of [0, -1, 1]) {
+    const candidate = rotateRaw(translate(game.block, dx, 0))
+    if (valid(game, candidate)) return { ...game, block: candidate }
+  }
+  return game
+}
