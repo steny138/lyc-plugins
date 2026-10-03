@@ -1,11 +1,11 @@
 /**
  * 共同服務核心：純函式，不碰 Node 也不碰引擎。
- * Node 外殼（server.ts）與引擎測試都把請求交給同一份 `handle`。
+ * Node 外殼（server.ts）與引擎測試都把請求交給同一份 `handle`；需要時間的地方由呼叫端傳入 `now`。
  */
 
 export type Request = { method: string; path: string; body?: string }
 export type Response = { status: number; text: string }
-export type Service = { handle: (request: Request) => Response }
+export type Service = { handle: (request: Request, now?: number) => Response }
 
 export type ServiceOptions = {
   /** 產生新的玩家憑證；Node 外殼傳 randomUUID，測試傳固定序列 */
@@ -14,8 +14,14 @@ export type ServiceOptions = {
   hostKey?: string
 }
 
+/** 參賽者在本局有名額；候補者等下一局 */
+type Role = 'participant' | 'candidate'
+
 /** 共同服務記得的一位玩家；credential 只回給本人，不出現在公開狀態 */
-type Player = { credential: string; nickname: string; isHost: boolean }
+type Player = { credential: string; nickname: string; isHost: boolean; isReady: boolean; role: Role }
+
+/** 本局進行到哪裡 */
+type Phase = 'lobby'
 
 /** 暱稱長度上限，為了面板名單排版 */
 const MAX_NICKNAME = 12
@@ -33,8 +39,15 @@ const parseBody = (body: string | undefined): Record<string, unknown> => {
   }
 }
 
+/** 回給本人的身分 */
+const identity = ({ credential, nickname, isHost }: Player) => ({ credential, nickname, isHost })
+
 export const createService = (instanceId: string, { newCredential, hostKey = '' }: ServiceOptions): Service => {
   const players: Player[] = []
+  const phase: Phase = 'lobby'
+
+  /** 依玩家憑證找人；找不到為 undefined */
+  const byCredential = (credential: unknown) => players.find(player => player.credential === credential)
 
   /** 和別人重複時依序加上 #2、#3…，直到沒有人用 */
   const uniqueNickname = (wanted: string) => {
@@ -48,25 +61,46 @@ export const createService = (instanceId: string, { newCredential, hostKey = '' 
 
   const join = (body: Record<string, unknown>): Response => {
     // 帶著已發出的玩家憑證：同一位玩家再加入，沿用原本的身分
-    const known = players.find(player => player.credential === body.credential)
-    if (known) return json(200, known)
+    const known = byCredential(body.credential)
+    if (known) return json(200, identity(known))
     const wanted = typeof body.nickname === 'string' ? body.nickname.trim() : ''
     if (wanted === '') return json(400, { error: '請輸入暱稱' })
     // 以 Unicode 字元計算，中文一字算一個
     if ([...wanted].length > MAX_NICKNAME) return json(400, { error: `暱稱最多 ${MAX_NICKNAME} 個字` })
     const isHost = hostKey !== '' && body.hostKey === hostKey
-    const player: Player = { credential: newCredential(), nickname: uniqueNickname(wanted), isHost }
+    const player: Player = {
+      credential: newCredential(),
+      nickname: uniqueNickname(wanted),
+      isHost,
+      isReady: false,
+      role: 'participant',
+    }
     players.push(player)
 
-    return json(200, player)
+    return json(200, identity(player))
+  }
+
+  /** 參賽者在大廳表示準備或取消準備 */
+  const ready = (body: Record<string, unknown>): Response => {
+    const player = byCredential(body.credential)
+    if (!player) return json(403, { error: '不認得這位玩家' })
+    if (phase !== 'lobby' || player.role !== 'participant') return json(409, { error: '現在不能改變準備狀態' })
+    player.isReady = body.isReady === true
+
+    return json(200, { isReady: player.isReady })
   }
 
   return {
     handle: ({ method, path, body }) => {
       if (method === 'GET' && path === '/state') {
-        return json(200, { instanceId, players: players.map(({ nickname, isHost }) => ({ nickname, isHost })) })
+        return json(200, {
+          instanceId,
+          phase,
+          players: players.map(({ nickname, isHost, isReady, role }) => ({ nickname, isHost, isReady, role })),
+        })
       }
       if (method === 'POST' && path === '/join') return join(parseBody(body))
+      if (method === 'POST' && path === '/ready') return ready(parseBody(body))
 
       return json(404, { error: 'not found' })
     },

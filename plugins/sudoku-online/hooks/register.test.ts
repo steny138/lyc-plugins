@@ -156,6 +156,23 @@ describe('加入與暱稱', () => {
   })
 })
 
+describe('準備', () => {
+  test('參賽者按準備後名單標示已準備，再按一次取消', async ($, on) => {
+    stubEngine(on)
+    routeFetch(on, newService())
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+    await ui.input({ key: 'nickname', text: 'Alice' })
+
+    await ui.press({ key: 'ready' })
+    expect(await ui.find({ type: 'Text', text: '・Alice（已準備）' })).toBeDefined()
+
+    await ui.press({ key: 'ready' })
+    expect(await ui.find({ type: 'Text', text: '・Alice' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Alice（已準備）' })).toBeUndefined()
+  })
+})
+
 describe('玩家憑證', () => {
   test('同一個 session 對同一個共同服務再加入一次，沿用原本的身分，不會多出一位玩家', async ($, on) => {
     stubEngine(on)

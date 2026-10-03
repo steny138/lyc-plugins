@@ -11,6 +11,8 @@ const OPEN_ARGS = { id: PANE, title: TITLE, columns: 72, rows: 26 }
 const POLL_MS = 1000
 /** 名單與「你是 …」上的房主標示 */
 const HOST_MARK = '（房主）'
+/** 名單上已準備的標示 */
+const READY_MARK = '（已準備）'
 
 const connection = atom({ plugin: 'sudoku-online', key: 'connection' } as const, null)
 const hosting = atom({ plugin: 'sudoku-online', key: 'hosting' } as const, null)
@@ -84,6 +86,16 @@ const resume = async ($: EngineInterface) => {
   if (current === null) return
   await refresh($, current.url)
   startPolling($, current.url)
+}
+
+/** 表示準備或取消準備，再讀回名單；連不上時由 refresh 標記中斷 */
+const setReady = async ($: EngineInterface, url: string, credential: string, isReady: boolean) => {
+  try {
+    await $.http.fetch(`${url}/ready`, { method: 'POST', body: JSON.stringify({ credential, isReady }) })
+  } catch {
+    // 連不上：下面的 refresh 會標記中斷
+  }
+  await refresh($, url)
 }
 
 /** 以存下的玩家憑證向共同服務確認身分；共同服務不認得（例如換了實例）就回 null */
@@ -230,7 +242,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const elements = $.ui.resolve(e)
-    const { Box, Text } = elements
+    const { Box, Button, Text } = elements
     // 行動版沒有輸入框（claude-code.d.ts 的 Elements.mobile），只能在電腦上輸入暱稱
     const Input = 'Input' in elements ? elements.Input : null
     const current = await read($, connection)
@@ -258,6 +270,21 @@ export const register: Register = on => {
       )
     }
 
+    // 大廳階段、非房主的參賽者才有準備按鈕；房主按開局就算準備
+    const mine = current.state?.players.find(player => player.nickname === current.me?.nickname)
+    const me = current.me
+    const readyButton =
+      me && !me.isHost && mine?.role === 'participant' && current.state?.phase === 'lobby' ? (
+        <Box marginTop={1}>
+          <Button
+            key="ready"
+            label={mine.isReady ? '取消準備' : '準備'}
+            hotkey="r"
+            onPress={() => void setReady($, current.url, me.credential, !mine.isReady)}
+          />
+        </Box>
+      ) : null
+
     return (
       <Box flexDirection="column" paddingTop={1} paddingLeft={2}>
         {hostLine}
@@ -282,13 +309,16 @@ export const register: Register = on => {
               <Text bold>{`你是 ${current.me?.nickname ?? ''}${current.me?.isHost ? HOST_MARK : ''}`}</Text>
             )}
             {current.me === null && current.joinError ? <Text color="red">{current.joinError}</Text> : null}
+            {readyButton}
             {current.state === null ? (
               <Text dimColor>讀取中…</Text>
             ) : (
               <Box flexDirection="column" marginTop={1}>
                 <Text dimColor>{`玩家（${current.state.players.length}）`}</Text>
                 {current.state.players.map(player => (
-                  <Text key={`player-${player.nickname}`}>{`・${player.nickname}${player.isHost ? HOST_MARK : ''}`}</Text>
+                  <Text key={`player-${player.nickname}`}>
+                    {`・${player.nickname}${player.isHost ? HOST_MARK : ''}${player.isReady ? READY_MARK : ''}`}
+                  </Text>
                 ))}
               </Box>
             )}

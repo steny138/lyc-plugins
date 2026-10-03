@@ -1,10 +1,18 @@
 /** 名單上的一位玩家（公開資訊，不含玩家憑證） */
-export type PlayerSummary = { nickname: string; isHost: boolean }
+export type PlayerSummary = {
+  nickname: string
+  isHost: boolean
+  isReady: boolean
+  /** participant：本局參賽者；candidate：候補者，等下一局 */
+  role: 'participant' | 'candidate'
+}
 
 /** 共同服務 `GET /state` 回傳的狀態 */
 export type ServiceState = {
   /** 共同服務實例識別碼；每次啟動都不同 */
   instanceId: string
+  /** 本局進行到哪裡；lobby：等待準備 */
+  phase: 'lobby'
   players: PlayerSummary[]
 }
 

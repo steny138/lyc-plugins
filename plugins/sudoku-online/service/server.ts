@@ -25,7 +25,7 @@ const server = createServer((req, res) => {
   req.setEncoding('utf8')
   req.on('data', chunk => (body += chunk))
   req.on('end', () => {
-    const { status, text } = service.handle({ method: req.method ?? 'GET', path: req.url ?? '/', body })
+    const { status, text } = service.handle({ method: req.method ?? 'GET', path: req.url ?? '/', body }, Date.now())
     res.writeHead(status, { 'content-type': 'application/json' })
     res.end(text)
   })
