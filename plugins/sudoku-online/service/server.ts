@@ -14,7 +14,7 @@ import { createService } from './core.ts'
 /** 共同服務的固定預設埠；被佔用時啟動失敗，不自動換埠 */
 const DEFAULT_PORT = 47900
 
-const service = createService(randomUUID())
+const service = createService(randomUUID(), { newCredential: randomUUID })
 
 const server = createServer((req, res) => {
   let body = ''

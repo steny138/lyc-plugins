@@ -29,6 +29,20 @@ const stubEngine = (on: On) => {
   return env
 }
 
+/** 依序產生 cred-1、cred-2…，代替隨機的玩家憑證 */
+const credentials = () => {
+  let n = 0
+
+  return () => `cred-${++n}`
+}
+
+/** 測試用的共同服務核心 */
+const newService = (instanceId = 'instance-1') => createService(instanceId, { newCredential: credentials() })
+
+/** 另一位玩家直接對共同服務核心加入，等於另一個客戶端 */
+const joinAs = (service: Service, nickname: string) =>
+  service.handle({ method: 'POST', path: '/join', body: JSON.stringify({ nickname }) })
+
 /** 假網路：`isDown` 為 true 時所有請求都連不上；`requests` 累計送達的請求數 */
 type Network = { isDown: boolean; requests?: number }
 
@@ -71,18 +85,47 @@ const mountPane = ($: Engine) =>
     },
   })
 
-describe('連線共同服務', () => {
-  test('join 後面板顯示共同服務目前的計數', async ($, on) => {
+/** 子程序印出位址後持續執行（等一個不會到的時間） */
+const spawnListening = (on: On, clock: { sleep: (ms: number) => Promise<void> }, addresses = ['192.168.1.5']) =>
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: `${JSON.stringify({ port: 47900, addresses })}\n` }
+    await clock.sleep(24 * 60 * 60 * 1000)
+
+    return { value: { code: 0, signal: null } }
+  })
+
+describe('加入與暱稱', () => {
+  test('輸入暱稱加入後看到自己與玩家名單，其他人加入時名單一秒內更新', async ($, on) => {
     stubEngine(on)
-    const service = createService('instance-1')
-    service.handle({ method: 'POST', path: '/bump' })
+    const clock = mock.clock(on)
+    const service = newService()
+    routeFetch(on, service)
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+
+    await ui.input({ key: 'nickname', text: 'Alice' })
+
+    expect(await ui.find({ type: 'Text', text: '你是 Alice' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Alice' })).toBeDefined()
+
+    joinAs(service, 'Bob')
+    await clock.advance(1000)
+    expect(await ui.find({ type: 'Text', text: '・Bob' })).toBeDefined()
+  })
+})
+
+describe('連線共同服務', () => {
+  test('join 後面板顯示共同服務位址與目前的玩家名單', async ($, on) => {
+    stubEngine(on)
+    const service = newService()
+    joinAs(service, 'Bob')
     routeFetch(on, service)
 
     await run($, 'join http://test:47900')
 
     const ui = await mountPane($)
-    expect(await ui.find({ type: 'Text', text: '計數：1' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '共同服務：http://test:47900' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Bob' })).toBeDefined()
   })
 })
 
@@ -102,7 +145,7 @@ describe('面板關閉時斷開連線', () => {
     stubEngine(on)
     const clock = mock.clock(on)
     const network: Network = { isDown: false }
-    routeFetch(on, createService('instance-1'), network)
+    routeFetch(on, newService(), network)
     await run($, 'join http://test:47900')
 
     await run($) // 面板看得到，再執行一次就關閉
@@ -115,26 +158,26 @@ describe('面板關閉時斷開連線', () => {
   test('重新打開面板時立刻讀到最新狀態，之後繼續輪詢', async ($, on) => {
     const env = stubEngine(on)
     const clock = mock.clock(on)
-    const service = createService('instance-1')
+    const service = newService()
     routeFetch(on, service)
     await run($, 'join http://test:47900')
     await run($)
 
-    service.handle({ method: 'POST', path: '/bump' })
+    joinAs(service, 'Bob')
     env.isOpen = false
     await run($)
     const ui = await mountPane($)
-    expect(await ui.find({ type: 'Text', text: '計數：1' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Bob' })).toBeDefined()
 
-    service.handle({ method: 'POST', path: '/bump' })
+    joinAs(service, 'Carol')
     await clock.advance(1000)
-    expect(await ui.find({ type: 'Text', text: '計數：2' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Carol' })).toBeDefined()
   })
 
   test('房主關閉面板時結束共同服務子程序，重新打開顯示已停止', async ($, on) => {
     const env = stubEngine(on)
     const clock = mock.clock(on)
-    routeFetch(on, createService('instance-1'))
+    routeFetch(on, newService())
     const child = { isRunning: false }
     on('process.spawn', async function* (_$, _e, next) {
       child.isRunning = true
@@ -168,14 +211,8 @@ describe('房主一鍵啟動共同服務', () => {
   test('啟動後顯示可分享的區網位址，並連上本機的共同服務', async ($, on) => {
     stubEngine(on)
     const clock = mock.clock(on)
-    routeFetch(on, createService('instance-1'))
-    // 子程序印出位址後持續執行（等一個不會到的時間）
-    on('process.spawn', async function* () {
-      yield { stream: 'stdout' as const, text: '{"port":47900,"addresses":["192.168.1.5"]}\n' }
-      await clock.sleep(24 * 60 * 60 * 1000)
-
-      return { value: { code: 0, signal: null } }
-    })
+    routeFetch(on, newService())
+    spawnListening(on, clock)
 
     await run($, 'host')
     await clock.settle()
@@ -183,19 +220,14 @@ describe('房主一鍵啟動共同服務', () => {
     const ui = await mountPane($)
     expect(await ui.find({ type: 'Text', text: '分享位址：http://192.168.1.5:47900' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '共同服務：http://127.0.0.1:47900' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '計數：0' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '玩家（0）' })).toBeDefined()
   })
 
   test('房主電腦有多個區網位址時全部列出', async ($, on) => {
     stubEngine(on)
     const clock = mock.clock(on)
-    routeFetch(on, createService('instance-1'))
-    on('process.spawn', async function* () {
-      yield { stream: 'stdout' as const, text: '{"port":47900,"addresses":["192.168.0.113","192.168.139.3"]}\n' }
-      await clock.sleep(24 * 60 * 60 * 1000)
-
-      return { value: { code: 0, signal: null } }
-    })
+    routeFetch(on, newService())
+    spawnListening(on, clock, ['192.168.0.113', '192.168.139.3'])
 
     await run($, 'host')
     await clock.settle()
@@ -229,13 +261,8 @@ describe('模組重新載入', () => {
   test('房主的共同服務在重新載入時被終止，面板改顯示已中止', async ($, on) => {
     stubEngine(on)
     const clock = mock.clock(on)
-    routeFetch(on, createService('instance-1'))
-    on('process.spawn', async function* () {
-      yield { stream: 'stdout' as const, text: '{"port":47900,"addresses":["192.168.1.5"]}\n' }
-      await clock.sleep(24 * 60 * 60 * 1000)
-
-      return { value: { code: 0, signal: null } }
-    })
+    routeFetch(on, newService())
+    spawnListening(on, clock)
     await run($, 'host')
     await clock.settle()
 
@@ -248,12 +275,13 @@ describe('模組重新載入', () => {
 })
 
 describe('共同服務實例改變', () => {
-  test('同一位址換成另一個共同服務實例時，面板顯示原局已失效，不顯示新實例的計數', async ($, on) => {
+  test('同一位址換成另一個共同服務實例時，面板顯示原局已失效，不顯示新實例的名單', async ($, on) => {
     stubEngine(on)
     const clock = mock.clock(on)
-    const first = createService('instance-1')
-    first.handle({ method: 'POST', path: '/bump' })
-    const second = createService('instance-2')
+    const first = newService('instance-1')
+    joinAs(first, 'Bob')
+    const second = newService('instance-2')
+    joinAs(second, 'Mallory')
     const network = { service: first }
     on('http.fetch', (_$, e) => {
       const path = e.url.replace(/^https?:\/\/[^/]+/, '') || '/'
@@ -263,54 +291,22 @@ describe('共同服務實例改變', () => {
     })
     await run($, 'join http://test:47900')
     const ui = await mountPane($)
-    expect(await ui.find({ type: 'Text', text: '計數：1' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Bob' })).toBeDefined()
 
     // 房主重啟共同服務：同一個位址，新的實例
     network.service = second
     await clock.advance(1000)
 
     expect(await ui.find({ type: 'Text', text: '原局已失效，請重新加入' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '計數：0' })).toBeUndefined()
-  })
-})
-
-describe('送出請求', () => {
-  test('在面板按 +1 後，共同服務的計數增加，面板一秒內顯示新計數', async ($, on) => {
-    stubEngine(on)
-    const clock = mock.clock(on)
-    const service = createService('instance-1')
-    routeFetch(on, service)
-    await run($, 'join http://test:47900')
-    const ui = await mountPane($)
-
-    await ui.press({ key: 'bump' })
-    await clock.advance(1000)
-
-    expect(JSON.parse(service.handle({ method: 'GET', path: '/state' }).text).count).toBe(1)
-    expect(await ui.find({ type: 'Text', text: '計數：1' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Mallory' })).toBeUndefined()
   })
 })
 
 describe('輪詢', () => {
-  test('共同服務的計數改變後，一秒內面板跟著更新', async ($, on) => {
+  test('連不上共同服務時顯示連線中斷，恢復後名單繼續更新', async ($, on) => {
     stubEngine(on)
     const clock = mock.clock(on)
-    const service = createService('instance-1')
-    routeFetch(on, service)
-    await run($, 'join http://test:47900')
-    const ui = await mountPane($)
-    expect(await ui.find({ type: 'Text', text: '計數：0' })).toBeDefined()
-
-    service.handle({ method: 'POST', path: '/bump' })
-    await clock.advance(1000)
-
-    expect(await ui.find({ type: 'Text', text: '計數：1' })).toBeDefined()
-  })
-
-  test('連不上共同服務時顯示連線中斷，恢復後顯示回計數', async ($, on) => {
-    stubEngine(on)
-    const clock = mock.clock(on)
-    const service = createService('instance-1')
+    const service = newService()
     const network = { isDown: false }
     routeFetch(on, service, network)
     await run($, 'join http://test:47900')
@@ -321,16 +317,16 @@ describe('輪詢', () => {
     expect(await ui.find({ type: 'Text', text: '連線中斷' })).toBeDefined()
 
     network.isDown = false
-    service.handle({ method: 'POST', path: '/bump' })
+    joinAs(service, 'Bob')
     await clock.advance(1000)
     expect(await ui.find({ type: 'Text', text: '連線中斷' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: '計數：1' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Bob' })).toBeDefined()
   })
 
-  test('面板關閉再開啟後仍顯示同一個共同服務與計數', async ($, on) => {
+  test('面板關閉再開啟後仍顯示同一個共同服務與名單', async ($, on) => {
     const env = stubEngine(on)
-    const service = createService('instance-1')
-    service.handle({ method: 'POST', path: '/bump' })
+    const service = newService()
+    joinAs(service, 'Bob')
     routeFetch(on, service)
     await run($, 'join http://test:47900')
     await (await mountPane($)).unmount()
@@ -340,6 +336,6 @@ describe('輪詢', () => {
 
     const ui = await mountPane($)
     expect(await ui.find({ type: 'Text', text: '共同服務：http://test:47900' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '計數：1' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Bob' })).toBeDefined()
   })
 })

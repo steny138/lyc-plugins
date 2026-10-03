@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { ServiceState } from '../types'
+import type { Me, ServiceState } from '../types'
 
 const PANE = 'sudoku-online'
 const TITLE = '數獨對戰'
@@ -39,10 +39,14 @@ const refresh = async ($: EngineInterface, url: string) => {
 const isPaneVisible = async ($: EngineInterface): Promise<boolean> =>
   (await $.ui.panes()).some(pane => pane.id === PANE && pane.isPlaced && pane.isShown)
 
-/** 請共同服務把計數加一，再讀回狀態；連不上時由 refresh 標記中斷 */
-const bump = async ($: EngineInterface, url: string) => {
+/** 以暱稱加入共同服務，存下共同服務發給的身分，再讀回名單；連不上時由 refresh 標記中斷 */
+const joinWithNickname = async ($: EngineInterface, url: string, nickname: string) => {
   try {
-    await $.http.fetch(`${url}/bump`, { method: 'POST' })
+    const response = await $.http.fetch(`${url}/join`, { method: 'POST', body: JSON.stringify({ nickname }) })
+    if (response.ok) {
+      const me = JSON.parse(response.text) as Me
+      await update($, connection, prev => (prev?.url === url ? { ...prev, me } : prev))
+    }
   } catch {
     // 連不上：下面的 refresh 會標記中斷
   }
@@ -74,7 +78,7 @@ const resume = async ($: EngineInterface) => {
 
 /** 連上共同服務並開始輪詢 */
 const connect = async ($: EngineInterface, url: string) => {
-  await update($, connection, () => ({ url, state: null, isConnected: false, isExpired: false }))
+  await update($, connection, () => ({ url, state: null, isConnected: false, isExpired: false, me: null }))
   await refresh($, url)
   startPolling($, url)
 }
@@ -189,7 +193,10 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Text } = elements
+    // 行動版沒有輸入框（claude-code.d.ts 的 Elements.mobile），只能在電腦上輸入暱稱
+    const Input = 'Input' in elements ? elements.Input : null
     const current = await read($, connection)
     const hosted = await read($, hosting)
     const hostLine =
@@ -219,15 +226,37 @@ export const register: Register = on => {
       <Box flexDirection="column" paddingTop={1} paddingLeft={2}>
         {hostLine}
         <Text>{`共同服務：${current.url}`}</Text>
+        {current.isConnected ? null : <Text color="red">連線中斷</Text>}
         {current.isExpired ? (
           <Text color="red">原局已失效，請重新加入</Text>
         ) : (
-          <Text>{current.state ? `計數：${current.state.count}` : '讀取中…'}</Text>
+          <Box flexDirection="column" marginTop={1}>
+            {current.me === null && Input === null ? (
+              <Text dimColor>請在電腦上的 Claude Code 輸入暱稱加入</Text>
+            ) : current.me === null && Input !== null ? (
+              <Input
+                key="nickname"
+                label="暱稱："
+                placeholder="輸入暱稱後按 Enter 加入"
+                submitLabel="加入"
+                autoFocus
+                onSubmit={(value: string) => void joinWithNickname($, current.url, value)}
+              />
+            ) : (
+              <Text bold>{`你是 ${current.me?.nickname ?? ''}`}</Text>
+            )}
+            {current.state === null ? (
+              <Text dimColor>讀取中…</Text>
+            ) : (
+              <Box flexDirection="column" marginTop={1}>
+                <Text dimColor>{`玩家（${current.state.players.length}）`}</Text>
+                {current.state.players.map(player => (
+                  <Text key={`player-${player.nickname}`}>{`・${player.nickname}`}</Text>
+                ))}
+              </Box>
+            )}
+          </Box>
         )}
-        {current.isConnected ? null : <Text color="red">連線中斷</Text>}
-        <Box marginTop={1}>
-          <Button key="bump" label="+1" hotkey="b" onPress={() => void bump($, current.url)} />
-        </Box>
       </Box>
     )
   })

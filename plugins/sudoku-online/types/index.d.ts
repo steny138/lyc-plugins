@@ -1,8 +1,20 @@
+/** 名單上的一位玩家（公開資訊，不含玩家憑證） */
+export type PlayerSummary = { nickname: string; isHost: boolean }
+
 /** 共同服務 `GET /state` 回傳的狀態 */
 export type ServiceState = {
   /** 共同服務實例識別碼；每次啟動都不同 */
   instanceId: string
-  count: number
+  players: PlayerSummary[]
+}
+
+/** 本機玩家在共同服務上的身分；`POST /join` 回傳 */
+export type Me = {
+  /** 玩家憑證：之後每個請求都帶上，用來認出同一位玩家 */
+  credential: string
+  /** 共同服務確認後的暱稱（重複時已加後綴） */
+  nickname: string
+  isHost: boolean
 }
 
 /** 本機與共同服務的連線 */
@@ -15,6 +27,8 @@ export type Connection = {
   isConnected: boolean
   /** 位址上已換成另一個共同服務實例：原局已失效，要重新加入 */
   isExpired: boolean
+  /** 本機玩家的身分；還沒輸入暱稱加入為 null */
+  me: Me | null
 }
 
 /** 房主啟動的共同服務子程序 */
