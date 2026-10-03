@@ -10,6 +10,8 @@ export type Service = { handle: (request: Request) => Response }
 export type ServiceOptions = {
   /** 產生新的玩家憑證；Node 外殼傳 randomUUID，測試傳固定序列 */
   newCredential: () => string
+  /** 房主密鑰：加入時帶上相同密鑰的人是房主；空字串表示沒有人能成為房主 */
+  hostKey?: string
 }
 
 /** 共同服務記得的一位玩家；credential 只回給本人，不出現在公開狀態 */
@@ -31,7 +33,7 @@ const parseBody = (body: string | undefined): Record<string, unknown> => {
   }
 }
 
-export const createService = (instanceId: string, { newCredential }: ServiceOptions): Service => {
+export const createService = (instanceId: string, { newCredential, hostKey = '' }: ServiceOptions): Service => {
   const players: Player[] = []
 
   /** 和別人重複時依序加上 #2、#3…，直到沒有人用 */
@@ -49,7 +51,8 @@ export const createService = (instanceId: string, { newCredential }: ServiceOpti
     if (wanted === '') return json(400, { error: '請輸入暱稱' })
     // 以 Unicode 字元計算，中文一字算一個
     if ([...wanted].length > MAX_NICKNAME) return json(400, { error: `暱稱最多 ${MAX_NICKNAME} 個字` })
-    const player: Player = { credential: newCredential(), nickname: uniqueNickname(wanted), isHost: false }
+    const isHost = hostKey !== '' && body.hostKey === hostKey
+    const player: Player = { credential: newCredential(), nickname: uniqueNickname(wanted), isHost }
     players.push(player)
 
     return json(200, player)

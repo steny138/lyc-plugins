@@ -9,6 +9,8 @@ const TITLE = '數獨對戰'
 const OPEN_ARGS = { id: PANE, title: TITLE, columns: 72, rows: 26 }
 /** 輪詢共同服務的間隔 */
 const POLL_MS = 1000
+/** 名單與「你是 …」上的房主標示 */
+const HOST_MARK = '（房主）'
 
 const connection = atom({ plugin: 'sudoku-online', key: 'connection' } as const, null)
 const hosting = atom({ plugin: 'sudoku-online', key: 'hosting' } as const, null)
@@ -41,8 +43,11 @@ const isPaneVisible = async ($: EngineInterface): Promise<boolean> =>
 
 /** 以暱稱加入共同服務，存下共同服務發給的身分，再讀回名單；連不上時由 refresh 標記中斷 */
 const joinWithNickname = async ($: EngineInterface, url: string, nickname: string) => {
+  // 房主連自己啟動的共同服務時帶上房主密鑰，取得房主身分
+  const hosted = await read($, hosting)
+  const hostKey = hosted?.status === 'running' && hosted.localUrl === url ? hosted.hostKey : undefined
   try {
-    const response = await $.http.fetch(`${url}/join`, { method: 'POST', body: JSON.stringify({ nickname }) })
+    const response = await $.http.fetch(`${url}/join`, { method: 'POST', body: JSON.stringify({ nickname, hostKey }) })
     if (response.ok) {
       const me = JSON.parse(response.text) as Me
       await update($, connection, prev => (prev?.url === url ? { ...prev, me, joinError: null } : prev))
@@ -111,8 +116,13 @@ const host = async ($: EngineInterface) => {
   let stderr = ''
   let reason: string
   stopReason = null
+  // 只有房主 mod 知道這串密鑰，區網上的其他人搶不走房主身分
+  const hostKey = crypto.randomUUID()
   try {
-    const child = $.process.spawn({ argv: ['node', `${$.plugin.root}/service/server.ts`] })
+    const child = $.process.spawn({
+      argv: ['node', `${$.plugin.root}/service/server.ts`],
+      env: { SUDOKU_ONLINE_HOST_KEY: hostKey },
+    })
     hostChild = child
     for await (const { stream, text } of child) {
       if (stream === 'stderr') {
@@ -123,11 +133,14 @@ const host = async ($: EngineInterface) => {
       const newline = stdout.indexOf('\n')
       if (newline === -1 || (await read($, hosting))?.status === 'running') continue
       const { port, addresses } = JSON.parse(stdout.slice(0, newline)) as Listening
+      const localUrl = `http://127.0.0.1:${port}`
       await update($, hosting, () => ({
         status: 'running' as const,
         shareUrls: addresses.map(address => `http://${address}:${port}`),
+        localUrl,
+        hostKey,
       }))
-      await connect($, `http://127.0.0.1:${port}`)
+      await connect($, localUrl)
     }
     reason = stderr.trim().split('\n').at(-1) || '共同服務已結束'
   } catch (error) {
@@ -248,7 +261,7 @@ export const register: Register = on => {
                 onSubmit={(value: string) => void joinWithNickname($, current.url, value)}
               />
             ) : (
-              <Text bold>{`你是 ${current.me?.nickname ?? ''}`}</Text>
+              <Text bold>{`你是 ${current.me?.nickname ?? ''}${current.me?.isHost ? HOST_MARK : ''}`}</Text>
             )}
             {current.me === null && current.joinError ? <Text color="red">{current.joinError}</Text> : null}
             {current.state === null ? (
@@ -257,7 +270,7 @@ export const register: Register = on => {
               <Box flexDirection="column" marginTop={1}>
                 <Text dimColor>{`玩家（${current.state.players.length}）`}</Text>
                 {current.state.players.map(player => (
-                  <Text key={`player-${player.nickname}`}>{`・${player.nickname}`}</Text>
+                  <Text key={`player-${player.nickname}`}>{`・${player.nickname}${player.isHost ? HOST_MARK : ''}`}</Text>
                 ))}
               </Box>
             )}

@@ -36,8 +36,11 @@ export type Connection = {
 /** 房主啟動的共同服務子程序 */
 export type Hosting =
   | { status: 'starting' }
-  /** shareUrls：給同區網玩家連線的位址；房主電腦有幾個區網 IPv4 就有幾個 */
-  | { status: 'running'; shareUrls: string[] }
+  /**
+   * shareUrls：給同區網玩家連線的位址；房主電腦有幾個區網 IPv4 就有幾個。
+   * localUrl：房主自己連線用的本機位址；hostKey：啟動時交給共同服務的房主密鑰
+   */
+  | { status: 'running'; shareUrls: string[]; localUrl: string; hostKey: string }
   | { status: 'failed'; reason: string }
   /** 房主主動停止（例如關閉面板） */
   | { status: 'stopped'; reason: string }

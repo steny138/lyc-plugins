@@ -156,6 +156,38 @@ describe('加入與暱稱', () => {
   })
 })
 
+describe('房主身分', () => {
+  test('房主以啟動時交給共同服務的密鑰加入，名單標示房主；沒有密鑰的人不是房主', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    // 共同服務在 spawn 時才拿到房主密鑰（環境變數），所以核心在 spawn hook 裡建立
+    const holder: { service: Service | null } = { service: null }
+    routeFetch(on, { handle: request => holder.service!.handle(request) })
+    on('process.spawn', async function* (_$, e) {
+      holder.service = createService('instance-1', {
+        newCredential: credentials(),
+        hostKey: e.env?.SUDOKU_ONLINE_HOST_KEY ?? '',
+      })
+      yield { stream: 'stdout' as const, text: '{"port":47900,"addresses":["192.168.1.5"]}\n' }
+      await clock.sleep(24 * 60 * 60 * 1000)
+
+      return { value: { code: 0, signal: null } }
+    })
+    await run($, 'host')
+    await clock.settle()
+    const ui = await mountPane($)
+
+    await ui.input({ key: 'nickname', text: 'Host' })
+    expect(await ui.find({ type: 'Text', text: '你是 Host（房主）' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Host（房主）' })).toBeDefined()
+
+    joinAs(holder.service!, 'Bob')
+    await clock.advance(1000)
+    expect(await ui.find({ type: 'Text', text: '・Bob' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Bob（房主）' })).toBeUndefined()
+  })
+})
+
 describe('連線共同服務', () => {
   test('join 後面板顯示共同服務位址與目前的玩家名單', async ($, on) => {
     stubEngine(on)

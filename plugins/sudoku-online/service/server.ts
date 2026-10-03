@@ -14,7 +14,11 @@ import { createService } from './core.ts'
 /** 共同服務的固定預設埠；被佔用時啟動失敗，不自動換埠 */
 const DEFAULT_PORT = 47900
 
-const service = createService(randomUUID(), { newCredential: randomUUID })
+const service = createService(randomUUID(), {
+  newCredential: randomUUID,
+  // 房主 mod 啟動時以環境變數交付；沒有就沒有人能成為房主
+  hostKey: process.env.SUDOKU_ONLINE_HOST_KEY ?? '',
+})
 
 const server = createServer((req, res) => {
   let body = ''
