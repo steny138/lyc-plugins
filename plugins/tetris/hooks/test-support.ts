@@ -1,7 +1,8 @@
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 export const stubEngine = (on: On) => {
-  const env = { isOpen: false, isShown: true }
+  const env = { isOpen: false, isShown: true, sessionId: 'session-1' }
+  on('session.id', () => ({ value: env.sessionId }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', () => { env.isOpen = true; return { value: { isPlaced: true as const } } })
@@ -10,7 +11,7 @@ export const stubEngine = (on: On) => {
   return env
 }
 export const run = ($: Engine) => $.command.run({ command: 'tetris', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
-export const mountPane = ($: Engine) => $.ui.mount({ plugin: 'tetris', surface: 'terminal', component: 'Pane', requestId: 'tetris', props: { title: '俄羅斯方塊', isFocused: true, bodyColumns: 48, placement: 'dock', scroll: { offset: 0, bodyRows: 32 }, view: {} } })
+export const mountPane = ($: Engine, bodyColumns = 48, bodyRows = 32) => $.ui.mount({ plugin: 'tetris', surface: 'terminal', component: 'Pane', requestId: 'tetris', props: { title: '俄羅斯方塊', isFocused: true, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows }, view: {} } })
 export type Ui = Awaited<ReturnType<typeof mountPane>>
 /** 只從 Raster 外部畫面讀回遊戲格，不存取 atom。 */
 export const board = async (ui: Ui) => {

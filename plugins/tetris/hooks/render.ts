@@ -1,5 +1,5 @@
 import type { Game } from '../types'
-import { coords } from './tetris'
+import { coords, spawn } from './tetris'
 /** 每格兩個單寬字元，明確以 little-endian 編碼 Raster triplets。 */
 export const raster = (game: Game): string => {
   const cells = { ...game.board }
@@ -15,4 +15,16 @@ export const raster = (game: Game): string => {
     data.setUint32(offset + 8, 0x01000000, true)
   }
   return bytes.toBase64()
+}
+/** 預覽用原版出生形狀，與下一個生成方塊共用幾何。 */
+export const preview = (shape: Game['next']): string => {
+  const cells = coords(spawn(shape))
+  const xs = cells.map(([x]) => x), ys = cells.map(([, y]) => y)
+  const rows: string[] = []
+  for (let y = Math.max(...ys); y >= Math.min(...ys); y--) {
+    let row = ''
+    for (let x = Math.min(...xs); x <= Math.max(...xs); x++) row += cells.some(([cx, cy]) => x === cx && y === cy) ? shape.repeat(2) : '  '
+    rows.push(row)
+  }
+  return rows.join('\n')
 }

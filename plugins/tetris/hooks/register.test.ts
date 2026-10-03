@@ -195,3 +195,72 @@ test('出生位置停止下落才結束，結束後停止操作與計時並可�
   expect(await ui.find({ type: 'Text', text: '遊戲中' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '分數：0' })).toBeDefined()
 })
+test('關閉面板仍推進，再開保留本局，暫停後關閉也保留暫停', async ($, on) => {
+  const env = stubEngine(on); const clock = mock.clock(on); await run($); await clock.settle(); const ui = await mountPane($)
+  expect((await run($)).text).toContain('已關閉'); expect(env.isOpen).toBe(false)
+  await clock.advance(800)
+  const before = await board(ui)
+  expect(before.slice(1, 3)).toEqual(['....LLL...','....L.....'])
+  expect((await run($)).text).toContain('已開啟'); expect(await board(ui)).toEqual(before)
+  await ui.press({ key: 'pause' }); await run($); await clock.advance(1000); await run($)
+  expect(await board(ui)).toEqual(before)
+  expect(await ui.find({ type: 'Text', text: '已暫停' })).toBeDefined()
+})
+test('session 結束取消舊排程，重新載入入口恢復本局且只有一條重力', async ($, on) => {
+  stubEngine(on); const clock = mock.clock(on)
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  await run($); await clock.settle(); const ui = await mountPane($)
+  const before = await board(ui)
+  await $.session.end({ reason: 'clear', sessionId: 'test', resume: { id: 'test' } })
+  await clock.advance(1200); expect(await board(ui)).toEqual(before)
+  // 模擬 session.start 恢復入口；不宣稱此測試卸載了模組或重設了 session state。
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await clock.advance(400)
+  expect((await board(ui))[0]).toBe('....LLL...')
+})
+test('空間不足時說明尺寸，仍能手動暫停而不自動暫停', async ($, on) => {
+  stubEngine(on); mock.clock(on); await run($); const ui = await mountPane($, 18, 12)
+  expect(await ui.find({ type: 'Text', text: /面板至少需要/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '遊戲中' })).toBeDefined()
+  await ui.press({ key: 'pause' })
+  expect(await ui.find({ type: 'Text', text: '已暫停' })).toBeDefined()
+})
+test('下一塊預覽顯示 O 的二乘二形狀', async ($, on) => {
+  stubEngine(on); mock.clock(on); await run($); const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: 'OOOO\nOOOO' })).toBeDefined()
+})
+test('session 識別改變時舊 ticker 不可寫入新 session', async ($, on) => {
+  const env = stubEngine(on); const clock = mock.clock(on); await run($); await clock.settle(); const ui = await mountPane($)
+  const before = await board(ui)
+  // 模擬引擎的身分邊界變化，不直接設定遊戲 state；真實 /clear 另行驗收。
+  env.sessionId = 'session-2'
+  await clock.advance(1200)
+  expect(await board(ui)).toEqual(before)
+})
+test('重新開始取消舊期限，反覆重畫不增生計時器', async ($, on) => {
+  stubEngine(on); const clock = mock.clock(on); await run($); await clock.settle(); const ui = await mountPane($)
+  await clock.advance(200); await ui.press({ key: 'restart' })
+  for (let i = 0; i < 4; i++) await ui.press({ key: 'down' })
+  const before = await board(ui)
+  await clock.advance(200); expect(await board(ui)).toEqual(before)
+  await clock.advance(200); expect(await board(ui)).not.toEqual(before)
+})
+test('不支援 Raster 的 surface 顯示 CLI 提示', async ($, on) => {
+  stubEngine(on); mock.clock(on); await run($)
+  const ui = await $.ui.mount({ plugin: 'tetris', surface: 'desktop', component: 'Pane', requestId: 'tetris', props: { title: '俄羅斯方塊', isFocused: true, bodyColumns: 48, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } })
+  expect(await ui.find({ type: 'Text', text: /請在 Claude Code CLI/ })).toBeDefined()
+  expect(await ui.find({ key: 'board' })).toBeUndefined()
+})
+test('只處理自己的 Pane，被其他分頁蓋住時可再開', async ($, on) => {
+  const env = stubEngine(on); mock.clock(on)
+  on('ui.render', { component: 'Pane', requestId: 'another' }, ($, e) => {
+    const { Text } = $.ui.resolve(e); return Text({ children: '另一個面板' })
+  })
+  await run($); env.isShown = false
+  expect((await run($)).text).toContain('已開啟')
+  const ui = await $.ui.mount({ plugin: 'tetris', surface: 'terminal', component: 'Pane', requestId: 'another', props: { title: '另一個面板', isFocused: true, bodyColumns: 48, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } })
+  expect(await ui.find({ key: 'board' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '另一個面板' })).toBeDefined()
+})
+
