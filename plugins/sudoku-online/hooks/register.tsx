@@ -32,6 +32,16 @@ const refresh = async ($: EngineInterface, url: string) => {
   })
 }
 
+/** 請共同服務把計數加一，再讀回狀態；連不上時由 refresh 標記中斷 */
+const bump = async ($: EngineInterface, url: string) => {
+  try {
+    await $.http.fetch(`${url}/bump`, { method: 'POST' })
+  } catch {
+    // 連不上：下面的 refresh 會標記中斷
+  }
+  await refresh($, url)
+}
+
 /** 目前的輪詢計時器；模組重新載入時歸零，由下一次 join 重新啟動 */
 let poller: Timer | null = null
 
@@ -106,7 +116,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const current = await read($, connection)
     const hosted = await read($, hosting)
     const hostLine =
@@ -136,6 +146,9 @@ export const register: Register = on => {
         <Text>{`共同服務：${current.url}`}</Text>
         <Text>{current.state ? `計數：${current.state.count}` : '讀取中…'}</Text>
         {current.isConnected ? null : <Text color="red">連線中斷</Text>}
+        <Box marginTop={1}>
+          <Button key="bump" label="+1" hotkey="b" onPress={() => void bump($, current.url)} />
+        </Box>
       </Box>
     )
   })

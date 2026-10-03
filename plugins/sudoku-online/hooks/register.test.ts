@@ -143,6 +143,23 @@ describe('房主一鍵啟動共同服務', () => {
   })
 })
 
+describe('送出請求', () => {
+  test('在面板按 +1 後，共同服務的計數增加，面板一秒內顯示新計數', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    const service = createService('instance-1')
+    routeFetch(on, service)
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+
+    await ui.press({ key: 'bump' })
+    await clock.advance(1000)
+
+    expect(JSON.parse(service.handle({ method: 'GET', path: '/state' }).text).count).toBe(1)
+    expect(await ui.find({ type: 'Text', text: '計數：1' })).toBeDefined()
+  })
+})
+
 describe('輪詢', () => {
   test('共同服務的計數改變後，一秒內面板跟著更新', async ($, on) => {
     stubEngine(on)
