@@ -11,6 +11,8 @@ export type Connection = {
   url: string
   /** 最後一次讀到的狀態；還沒讀到為 null */
   state: ServiceState | null
+  /** 最後一次請求是否連上共同服務 */
+  isConnected: boolean
 }
 
 declare module 'claude-code' {
