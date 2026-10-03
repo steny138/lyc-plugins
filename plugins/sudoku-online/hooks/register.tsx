@@ -26,9 +26,12 @@ const refresh = async ($: EngineInterface, url: string) => {
     // 連不上：交給下面標記為中斷
   }
   await update($, connection, prev => {
-    if (prev?.url !== url) return prev
+    if (prev?.url !== url || prev.isExpired) return prev
+    if (state === null) return { ...prev, isConnected: false }
+    // 實例識別碼改變：共同服務重啟過，原局已失效，不採用新實例的狀態
+    if (prev.state && prev.state.instanceId !== state.instanceId) return { ...prev, isConnected: true, isExpired: true }
 
-    return state ? { ...prev, state, isConnected: true } : { ...prev, isConnected: false }
+    return { ...prev, state, isConnected: true }
   })
 }
 
@@ -49,12 +52,17 @@ const bump = async ($: EngineInterface, url: string) => {
 /** 目前的輪詢計時器；模組重新載入時歸零，由下一次 join 重新啟動 */
 let poller: Timer | null = null
 
-/** 連上共同服務並開始輪詢；寫入 connection 會讓面板重畫，所以輪詢只要更新狀態 */
-const connect = async ($: EngineInterface, url: string) => {
-  await update($, connection, () => ({ url, state: null, isConnected: false }))
-  await refresh($, url)
+/** 每秒輪詢共同服務；寫入 connection 會讓面板重畫，所以輪詢只要更新狀態 */
+const startPolling = ($: EngineInterface, url: string) => {
   poller?.cancel()
   poller = $.clock.every(POLL_MS, () => void refresh($, url))
+}
+
+/** 連上共同服務並開始輪詢 */
+const connect = async ($: EngineInterface, url: string) => {
+  await update($, connection, () => ({ url, state: null, isConnected: false, isExpired: false }))
+  await refresh($, url)
+  startPolling($, url)
 }
 
 /**
@@ -96,6 +104,16 @@ export const register: Register = on => {
       name: 'sudoku-online',
       description: '數獨對戰：/sudoku-online host 啟動共同服務、/sudoku-online join <位址> 加入',
     })
+    // 熱重載也會走到這裡：引擎卸載舊模組時已結束共同服務子程序（ADR 0001），
+    // 但 hosting 存在 session 狀態裡不會清掉，要改成已中止
+    await update($, hosting, prev =>
+      prev?.status === 'running' || prev?.status === 'starting'
+        ? { status: 'failed' as const, reason: '模組重新載入，共同服務已中止' }
+        : prev,
+    )
+    // 輪詢計時器是模組變數，重載後就沒了；connection 還在就接著輪詢
+    const current = await read($, connection)
+    if (current) startPolling($, current.url)
 
     return next(e)
   })
@@ -154,7 +172,11 @@ export const register: Register = on => {
       <Box flexDirection="column" paddingTop={1} paddingLeft={2}>
         {hostLine}
         <Text>{`共同服務：${current.url}`}</Text>
-        <Text>{current.state ? `計數：${current.state.count}` : '讀取中…'}</Text>
+        {current.isExpired ? (
+          <Text color="red">原局已失效，請重新加入</Text>
+        ) : (
+          <Text>{current.state ? `計數：${current.state.count}` : '讀取中…'}</Text>
+        )}
         {current.isConnected ? null : <Text color="red">連線中斷</Text>}
         <Box marginTop={1}>
           <Button key="bump" label="+1" hotkey="b" onPress={() => void bump($, current.url)} />

@@ -154,6 +154,58 @@ describe('房主一鍵啟動共同服務', () => {
   })
 })
 
+/** 模擬模組熱重載：引擎會再發一次 session.start（模組變數在測試中不會歸零） */
+const reload = ($: Engine) => $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+
+describe('模組重新載入', () => {
+  test('房主的共同服務在重新載入時被終止，面板改顯示已中止', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    routeFetch(on, createService('instance-1'))
+    on('process.spawn', async function* () {
+      yield { stream: 'stdout' as const, text: '{"port":47900,"addresses":["192.168.1.5"]}\n' }
+      await clock.sleep(24 * 60 * 60 * 1000)
+
+      return { value: { code: 0, signal: null } }
+    })
+    await run($, 'host')
+    await clock.settle()
+
+    await reload($)
+
+    const ui = await mountPane($)
+    expect(await ui.find({ type: 'Text', text: '分享位址：http://192.168.1.5:47900' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '共同服務啟動失敗：模組重新載入，共同服務已中止' })).toBeDefined()
+  })
+})
+
+describe('共同服務實例改變', () => {
+  test('同一位址換成另一個共同服務實例時，面板顯示原局已失效，不顯示新實例的計數', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    const first = createService('instance-1')
+    first.handle({ method: 'POST', path: '/bump' })
+    const second = createService('instance-2')
+    const network = { service: first }
+    on('http.fetch', (_$, e) => {
+      const path = e.url.replace(/^https?:\/\/[^/]+/, '') || '/'
+      const response = network.service.handle({ method: e.init?.method ?? 'GET', path, body: e.init?.body })
+
+      return { value: { ...response, ok: response.status >= 200 && response.status < 300, headers: {} } }
+    })
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+    expect(await ui.find({ type: 'Text', text: '計數：1' })).toBeDefined()
+
+    // 房主重啟共同服務：同一個位址，新的實例
+    network.service = second
+    await clock.advance(1000)
+
+    expect(await ui.find({ type: 'Text', text: '原局已失效，請重新加入' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '計數：0' })).toBeUndefined()
+  })
+})
+
 describe('送出請求', () => {
   test('在面板按 +1 後，共同服務的計數增加，面板一秒內顯示新計數', async ($, on) => {
     stubEngine(on)

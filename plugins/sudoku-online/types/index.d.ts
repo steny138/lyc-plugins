@@ -13,6 +13,8 @@ export type Connection = {
   state: ServiceState | null
   /** 最後一次請求是否連上共同服務 */
   isConnected: boolean
+  /** 位址上已換成另一個共同服務實例：原局已失效，要重新加入 */
+  isExpired: boolean
 }
 
 /** 房主啟動的共同服務子程序 */

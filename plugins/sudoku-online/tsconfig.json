@@ -1,1 +1,5 @@
-{ "extends": "./.claude-plugin/types/tsconfig.json" }
+{
+  "extends": "./.claude-plugin/types/tsconfig.json",
+  // 測試與 Node 外殼都以 `../service/core.ts` 匯入共同服務核心（Node 執行 .ts 需要副檔名）
+  "compilerOptions": { "allowImportingTsExtensions": true }
+}
