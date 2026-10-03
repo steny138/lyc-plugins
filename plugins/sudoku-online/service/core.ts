@@ -47,6 +47,9 @@ export const createService = (instanceId: string, { newCredential, hostKey = '' 
   }
 
   const join = (body: Record<string, unknown>): Response => {
+    // 帶著已發出的玩家憑證：同一位玩家再加入，沿用原本的身分
+    const known = players.find(player => player.credential === body.credential)
+    if (known) return json(200, known)
     const wanted = typeof body.nickname === 'string' ? body.nickname.trim() : ''
     if (wanted === '') return json(400, { error: '請輸入暱稱' })
     // 以 Unicode 字元計算，中文一字算一個

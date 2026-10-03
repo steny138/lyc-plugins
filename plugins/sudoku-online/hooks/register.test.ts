@@ -156,6 +156,22 @@ describe('加入與暱稱', () => {
   })
 })
 
+describe('玩家憑證', () => {
+  test('同一個 session 對同一個共同服務再加入一次，沿用原本的身分，不會多出一位玩家', async ($, on) => {
+    stubEngine(on)
+    routeFetch(on, newService())
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+    await ui.input({ key: 'nickname', text: 'Alice' })
+
+    await run($, 'join http://test:47900')
+
+    expect(await ui.find({ type: 'Text', text: '你是 Alice' })).toBeDefined()
+    expect(await ui.find({ type: 'Input', key: 'nickname' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '玩家（1）' })).toBeDefined()
+  })
+})
+
 describe('房主身分', () => {
   test('房主以啟動時交給共同服務的密鑰加入，名單標示房主；沒有密鑰的人不是房主', async ($, on) => {
     stubEngine(on)

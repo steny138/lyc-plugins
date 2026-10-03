@@ -86,9 +86,27 @@ const resume = async ($: EngineInterface) => {
   startPolling($, current.url)
 }
 
-/** 連上共同服務並開始輪詢 */
+/** 以存下的玩家憑證向共同服務確認身分；共同服務不認得（例如換了實例）就回 null */
+const confirmMe = async ($: EngineInterface, url: string, me: Me): Promise<Me | null> => {
+  try {
+    const response = await $.http.fetch(`${url}/join`, {
+      method: 'POST',
+      body: JSON.stringify({ credential: me.credential }),
+    })
+    const confirmed = response.ok ? (JSON.parse(response.text) as Me) : null
+
+    return confirmed?.credential === me.credential ? confirmed : null
+  } catch {
+    // 連不上就先沿用本機的身分，輪詢會標記中斷
+    return me
+  }
+}
+
+/** 連上共同服務並開始輪詢；對同一個共同服務再加入時，沿用原本的玩家身分 */
 const connect = async ($: EngineInterface, url: string) => {
-  await update($, connection, () => ({ url, state: null, isConnected: false, isExpired: false, me: null, joinError: null }))
+  const prev = await read($, connection)
+  const me = prev?.url === url && prev.me && !prev.isExpired ? await confirmMe($, url, prev.me) : null
+  await update($, connection, () => ({ url, state: null, isConnected: false, isExpired: false, me, joinError: null }))
   await refresh($, url)
   startPolling($, url)
 }
