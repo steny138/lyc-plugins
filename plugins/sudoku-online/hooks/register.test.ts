@@ -433,6 +433,66 @@ describe('提交與名次', () => {
   })
 })
 
+/** 共同服務已有房主開好一局、正式開始（now = 5000）；回傳核心、房主憑證、題目、答案與本局編號 */
+const playingService = () => {
+  const service = createService('instance-1', { newCredential: credentials(), hostKey: 'key' })
+  const host = (JSON.parse(postAs(service, '/join', { nickname: 'Host', hostKey: 'key' }).text) as { credential: string })
+    .credential
+  postAs(service, '/start', { credential: host, difficulty: 'easy' }, 0)
+  const { puzzle, roundId } = publicState(service, 5000)
+
+  return { service, host, puzzle: puzzle!, answer: solve(puzzle!)!, roundId: roundId! }
+}
+
+describe('共同服務驗證提交', () => {
+  /** 房主送出依本局題目做出的盤面，回傳狀態碼與之後的名次列表 */
+  const submitWith = (make: (game: ReturnType<typeof playingService>) => { cells: unknown; roundId?: number }) => {
+    const game = playingService()
+    const { cells, roundId = game.roundId } = make(game)
+    const { status } = postAs(game.service, '/submit', { credential: game.host, roundId, cells }, 6000)
+
+    return { status, ranking: publicState(game.service, 6000).ranking }
+  }
+
+  test('未填滿的盤面不列入名次', () => {
+    expect(submitWith(({ puzzle }) => ({ cells: puzzle }))).toEqual({ status: 400, ranking: [] })
+  })
+
+  test('有 1–9 以外字元的盤面不列入名次', () => {
+    expect(submitWith(({ answer }) => ({ cells: `0${answer.slice(1)}` }))).toEqual({ status: 400, ranking: [] })
+  })
+
+  test('長度不是 81 的盤面不列入名次', () => {
+    expect(submitWith(({ answer }) => ({ cells: answer.slice(0, 80) }))).toEqual({ status: 400, ranking: [] })
+  })
+
+  test('改了題目數字的完整盤面不列入名次', () => {
+    // 答案裡的 1 與 2 對調仍是合法的完整數獨，但題目上的 1、2 被改掉了
+    const swapped = (answer: string) => answer.replace(/[12]/g, d => (d === '1' ? '2' : '1'))
+
+    expect(submitWith(({ answer }) => ({ cells: swapped(answer) }))).toEqual({ status: 400, ranking: [] })
+  })
+
+  test('保留題目數字但有衝突的盤面不列入名次', () => {
+    // 第一個空格改成別的數字：題目數字沒動，但和同列的答案數字衝突
+    const clashing = ({ puzzle, answer }: ReturnType<typeof playingService>) => {
+      const i = puzzle.indexOf('.')
+      const other = answer[i] === '9' ? '1' : String(Number(answer[i]) + 1)
+
+      return answer.slice(0, i) + other + answer.slice(i + 1)
+    }
+
+    expect(submitWith(game => ({ cells: clashing(game) }))).toEqual({ status: 400, ranking: [] })
+  })
+
+  test('本局編號不符的正確盤面不列入名次', () => {
+    expect(submitWith(({ answer, roundId }) => ({ cells: answer, roundId: roundId + 1 }))).toEqual({
+      status: 409,
+      ranking: [],
+    })
+  })
+})
+
 describe('本局狀態', () => {
   test('面板顯示本局目前的階段：等待準備、倒數中', async ($, on) => {
     const { ui } = await hostAs($, on)

@@ -143,6 +143,11 @@ export const createService = (
     const player = byCredential(body.credential)
     if (!player) return json(403, { error: '不認得這位玩家' })
     if (round === null || phaseAt(now) !== 'playing') return json(409, { error: '本局還沒開始' })
+    // 上一局（或別的局）的盤面不算進這一局
+    if (body.roundId !== round.id) return json(409, { error: '這份盤面不屬於本局' })
+    // 題目只有一個解，所以等於本局答案就同時保證：81 格都是 1–9、題目數字沒改、沒有衝突。
+    // 不能只看填滿且沒有衝突（spec「答案驗證」）：那樣改了題目數字的盤面也會過
+    if (body.cells !== round.solution) return json(400, { error: '盤面不正確' })
     const entry = { credential: player.credential, nickname: player.nickname, rank: ranking.length + 1, elapsedMs: now - round.startsAt }
     ranking.push(entry)
 
