@@ -187,13 +187,14 @@ const credentialOf = (service: Service, nickname: string) =>
 
 /**
  * 房主情境：一鍵啟動（假子程序把房主密鑰交給核心）、打開面板、以「Host」加入。
- * 回傳時鐘、面板與核心；核心在 spawn 時才建立，所以用函式取得。
+ * 回傳時鐘、面板、假網路與核心；核心在 spawn 時才建立，所以用函式取得。
  */
 const hostAs = async ($: Engine, on: On) => {
   stubEngine(on)
   const clock = mock.clock(on)
   const holder: { service: Service | null } = { service: null }
-  routeFetch(on, { handle: (request, now) => holder.service!.handle(request, now) }, { isDown: false }, clock)
+  const network: Network = { isDown: false }
+  routeFetch(on, { handle: (request, now) => holder.service!.handle(request, now) }, network, clock)
   on('process.spawn', async function* (_$, e) {
     holder.service = createService('instance-1', {
       newCredential: credentials(),
@@ -209,7 +210,7 @@ const hostAs = async ($: Engine, on: On) => {
   const ui = await mountPane($)
   await ui.input({ key: 'nickname', text: 'Host' })
 
-  return { clock, ui, service: () => holder.service! }
+  return { clock, ui, network, service: () => holder.service! }
 }
 
 describe('開局與倒數', () => {
@@ -518,6 +519,29 @@ describe('提交資格', () => {
 
     expect(postAs(service, '/submit', { credential: host, roundId, cells: answer }, 4000).status).toBe(409)
     expect(publicState(service, 6000).ranking).toEqual([])
+  })
+})
+
+describe('完成時連不上', () => {
+  test('填完時連不上共同服務先顯示尚未確認，恢復後自動重送，用時以共同服務收到的時間計算', async ($, on) => {
+    const { ui, service, clock, network } = await playAsHost($, on)
+    const puzzle = publicState(service(), clock.now()).puzzle!
+    const last = puzzle.lastIndexOf('.')
+    await fillAnswer(ui, puzzle, [last])
+
+    network.isDown = true
+    await ui.press({ key: `cell-${last}` })
+    await ui.press({ key: `digit-${solve(puzzle)![last]}` })
+
+    expect(await ui.find({ type: 'Text', text: '已完成，尚未取得共同服務確認' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '1. Host 0:00' })).toBeUndefined()
+
+    await clock.advance(10_000)
+    network.isDown = false
+    await clock.advance(1000)
+
+    expect(await ui.find({ type: 'Text', text: '你是第 1 名，用時 0:11' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '已完成，尚未取得共同服務確認' })).toBeUndefined()
   })
 })
 

@@ -143,10 +143,16 @@ const joinWithNickname = async ($: EngineInterface, url: string, nickname: strin
 /** 目前的輪詢計時器；模組重新載入時歸零，由下一次 join 重新啟動 */
 let poller: Timer | null = null
 
+/** 每次輪詢：讀回最新狀態；填完卻還沒取得名次（例如提交時連不上）就重送 */
+const poll = async ($: EngineInterface, url: string) => {
+  await refresh($, url)
+  await submitIfDone($, url)
+}
+
 /** 每秒輪詢共同服務；寫入 connection 會讓面板重畫，所以輪詢只要更新狀態 */
 const startPolling = ($: EngineInterface, url: string) => {
   poller?.cancel()
-  poller = $.clock.every(POLL_MS, () => void refresh($, url))
+  poller = $.clock.every(POLL_MS, () => void poll($, url))
 }
 
 /** 停止輪詢；面板關閉時呼叫 */
@@ -411,6 +417,8 @@ export const register: Register = on => {
     const clashing = local === null ? new Set<number>() : conflicts(local.cells)
     // 共同服務列了名次就鎖住盤面
     const myRank = rankOf(current.state, me?.nickname)
+    // 填完但共同服務還沒列名次（例如提交時連不上）：每次輪詢都會重送
+    const isPending = !myRank && local !== null && isComplete(local.cells)
     const ranking = current.state?.ranking ?? []
     const boardView =
       puzzle === undefined || local === null ? null : (
@@ -454,7 +462,9 @@ export const register: Register = on => {
           ))}
           {myRank ? (
             <Text bold color="green">{`你是第 ${myRank.rank} 名，用時 ${formatElapsed(myRank.elapsedMs)}`}</Text>
-          ) : (
+          ) : null}
+          {isPending ? <Text color="yellow">已完成，尚未取得共同服務確認</Text> : null}
+          {myRank ? null : (
             <Box flexDirection="column" marginTop={1}>
               {[0, 1, 2].map(r => (
                 <Box key={`keys-${r}`} gap={1}>
