@@ -1,6 +1,6 @@
 import type { Game } from '../types'
 import { coords, spawn } from './tetris'
-/** 每格兩個單寬字元，明確以 little-endian 編碼 Raster triplets。 */
+/** 每格兩個單寬字元：固定方塊 █、活動方塊 ▓（同形狀色），空格左半為暗色 ·；以 little-endian 編碼 Raster triplets。 */
 export const raster = (game: Game): string => {
   const cells = { ...game.board }
   const active = new Set(coords(game.block).map(([x, y]) => `${x},${y}`))
@@ -12,9 +12,9 @@ export const raster = (game: Game): string => {
     const key = `${Math.floor(col / 2) + 1},${20 - row}`
     const shape = cells[key]
     const offset = (row * 20 + col) * 12
-    data.setUint32(offset, shape ? shape.charCodeAt(0) : 46, true)
+    data.setUint32(offset, shape ? (active.has(key) ? 0x2593 : 0x2588) : col % 2 ? 0x20 : 0xb7, true)
     data.setUint32(offset + 4, shape ? colors[shape] : 0x39404d, true)
-    data.setUint32(offset + 8, active.has(key) ? 0x303c54 : 0x01000000, true)
+    data.setUint32(offset + 8, 0x01000000, true)
   }
   return bytes.toBase64()
 }
@@ -25,7 +25,7 @@ export const preview = (shape: Game['next']): string => {
   const rows: string[] = []
   for (let y = Math.max(...ys); y >= Math.min(...ys); y--) {
     let row = ''
-    for (let x = Math.min(...xs); x <= Math.max(...xs); x++) row += cells.some(([cx, cy]) => x === cx && y === cy) ? shape.repeat(2) : '  '
+    for (let x = Math.min(...xs); x <= Math.max(...xs); x++) row += cells.some(([cx, cy]) => x === cx && y === cy) ? '██' : '  '
     rows.push(row)
   }
   return rows.join('\n')

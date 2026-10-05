@@ -237,7 +237,7 @@ test('最少列數等於版面實際高度：並排 20 列、直排 31 列、窄
 })
 test('下一塊預覽顯示 O 的二乘二形狀', async ($, on) => {
   stubEngine(on); mock.clock(on); await run($); const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: 'OOOO\nOOOO' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '████\n████' })).toBeDefined()
 })
 test('session 識別改變時舊 ticker 不可寫入新 session', async ($, on) => {
   const env = stubEngine(on); const clock = mock.clock(on); await run($); await clock.settle(); const ui = await mountPane($)
@@ -273,18 +273,18 @@ test('只處理自己的 Pane，被其他分頁蓋住時可再開', async ($, on
   expect(await ui.find({ type: 'Text', text: '另一個面板' })).toBeDefined()
 })
 
-test('同形 L 的活動四格有不同背景，暫停時仍與固定格可辨', async ($, on) => {
+test('同形 L 的活動四格以 ▓ 與固定的 █ 區分，暫停時仍可辨', async ($, on) => {
   stubEngine(on); const clock = mock.clock(on); await clock.advance(2)
   await run($); const ui = await mountPane($)
   await ui.press({ key: 'drop' }); await clock.advance(400)
   for (let i = 0; i < 4; i++) await ui.press({ key: 'down' })
   const cells = await rasterCells(ui)
-  const active = cells.slice(0, 50).filter(cell => cell.char === 'L')
-  const fixed = cells.slice(50).filter(cell => cell.char === 'L')
+  const active = cells.slice(0, 50).filter(cell => cell.shape === 'L')
+  const fixed = cells.slice(50).filter(cell => cell.shape === 'L')
   expect(active).toHaveLength(4)
   expect(fixed.length).toBeGreaterThan(0)
-  expect(active[0]!.background).not.toBe(fixed[0]!.background)
-  expect(active.every(cell => cell.background === active[0]!.background)).toBe(true)
+  expect(active.every(cell => cell.char === '▓' && cell.foreground === fixed[0]!.foreground)).toBe(true)
+  expect(fixed.every(cell => cell.char === '█')).toBe(true)
   await ui.press({ key: 'pause' }); await clock.advance(1000)
   expect(await rasterCells(ui)).toEqual(cells)
 })

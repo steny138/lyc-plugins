@@ -13,12 +13,12 @@ export const stubEngine = (on: On) => {
 export const run = ($: Engine) => $.command.run({ command: 'tetris', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
 export const mountPane = ($: Engine, bodyColumns = 48, bodyRows = 32) => $.ui.mount({ plugin: 'tetris', surface: 'terminal', component: 'Pane', requestId: 'tetris', props: { title: '俄羅斯方塊', isFocused: true, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows }, view: {} } })
 export type Ui = Awaited<ReturnType<typeof mountPane>>
-/** 只從 Raster 外部畫面讀回遊戲格，不存取 atom。 */
+/** 畫面上各形狀的前景色；方塊字元不帶字母，以顏色辨認形狀。 */
+const SHAPE_OF_COLOR: Record<number, string> = { 0x56cfe1: 'I', 0xffd166: 'O', 0xc77dff: 'T', 0x80ed99: 'S', 0xff6b6b: 'Z', 0x5390d9: 'J', 0xf4a261: 'L' }
+/** 只從 Raster 外部畫面讀回遊戲格，不存取 atom；空格為 `.`，方塊為其形狀字母。 */
 export const board = async (ui: Ui) => {
-  const el = await ui.find({ key: 'board' })
-  const bytes = Uint8Array.fromBase64(el!.props.cells as string)
-  const data = new DataView(bytes.buffer)
-  return Array.from({ length: 20 }, (_, row) => Array.from({ length: 10 }, (_, col) => String.fromCharCode(data.getUint32((row * 20 + col * 2) * 12, true))).join(''))
+  const cells = await rasterCells(ui)
+  return Array.from({ length: 20 }, (_, row) => cells.slice(row * 10, row * 10 + 10).map(cell => cell.shape ?? '.').join(''))
 }
 
 /** 固定種子 0 的正常操作 fixture；末塊使第 2 行填滿，清除後上方下移。 */
@@ -38,6 +38,8 @@ export const rasterCells = async (ui: Ui) => {
   const data = new DataView(bytes.buffer)
   return Array.from({ length: 200 }, (_, i) => {
     const offset = (Math.floor(i / 10) * 20 + i % 10 * 2) * 12
-    return { char: String.fromCharCode(data.getUint32(offset, true)), background: data.getUint32(offset + 8, true) }
+    const char = String.fromCharCode(data.getUint32(offset, true))
+    const foreground = data.getUint32(offset + 4, true)
+    return { char, foreground, background: data.getUint32(offset + 8, true), shape: char === '█' || char === '▓' ? SHAPE_OF_COLOR[foreground] : undefined }
   })
 }
