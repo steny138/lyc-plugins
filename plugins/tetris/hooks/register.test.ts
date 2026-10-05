@@ -221,7 +221,7 @@ test('session 結束取消舊排程，重新載入入口恢復本局且只有一
 })
 test('空間不足時說明尺寸，仍能手動暫停而不自動暫停', async ($, on) => {
   stubEngine(on); mock.clock(on); await run($); const ui = await mountPane($, 18, 12)
-  expect(await ui.find({ type: 'Text', text: /面板至少需要/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /面板至少需要.*（目前 18 欄 × 12 列，dock）/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '遊戲中' })).toBeDefined()
   await ui.press({ key: 'pause' })
   expect(await ui.find({ type: 'Text', text: '已暫停' })).toBeDefined()

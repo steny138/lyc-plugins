@@ -74,7 +74,7 @@ export const register: Register = on => {
     const status = isGameOver(current) ? '遊戲結束' : current.paused ? '已暫停' : current.locked ? '正在固定（下一 tick）' : '遊戲中'
     const minRows = e.props.bodyColumns < 36 ? 35 : 32
     if (e.props.bodyColumns < 22 || e.props.scroll.bodyRows < minRows) return <Box flexDirection="column">
-      <Text>{`面板至少需要 22 欄與 ${minRows} 列，請放大終端或面板。`}</Text>
+      <Text>{`面板至少需要 22 欄與 ${minRows} 列（目前 ${e.props.bodyColumns} 欄 × ${e.props.scroll.bodyRows} 列，${e.props.placement}），請放大終端或面板。`}</Text>
       <Text>{status}</Text>
       <Button key="pause" label={current.paused ? '繼續 P' : '暫停 P'} hotkey="p" onPress={() => pause($)} />
       <Button key="restart" label="重新開始 R" hotkey="r" onPress={() => restart($)} />
