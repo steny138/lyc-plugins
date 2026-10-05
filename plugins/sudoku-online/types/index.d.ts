@@ -83,10 +83,10 @@ export type Board = {
 export type Hosting =
   | { status: 'starting' }
   /**
-   * shareUrls：給同區網玩家連線的位址；房主電腦有幾個區網 IPv4 就有幾個。
+   * addresses：房主電腦的區網 IPv4，給同區網玩家連線；port：共同服務監聽的埠號。
    * localUrl：房主自己連線用的本機位址；hostKey：啟動時交給共同服務的房主密鑰
    */
-  | { status: 'running'; shareUrls: string[]; localUrl: string; hostKey: string }
+  | { status: 'running'; addresses: string[]; port: number; localUrl: string; hostKey: string }
   | { status: 'failed'; reason: string }
   /** 房主主動停止（例如關閉面板） */
   | { status: 'stopped'; reason: string }

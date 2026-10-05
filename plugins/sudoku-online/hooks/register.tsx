@@ -214,6 +214,14 @@ const fill = async ($: EngineInterface, url: string, puzzle: string, value: stri
   await submitIfDone($, url)
 }
 
+/** 開局後的分享位址摘要：只列第一個位址，其餘以數量帶過；沒有區網位址為 null */
+const shareSummary = (addresses: string[]) =>
+  addresses.length === 0
+    ? null
+    : addresses.length > 1
+      ? `分享：${addresses[0]} 等 ${addresses.length} 個位址`
+      : `分享：${addresses[0]}`
+
 /** 用時顯示成 m:ss */
 const formatElapsed = (ms: number) => {
   const seconds = Math.floor(ms / 1000)
@@ -297,7 +305,8 @@ const host = async ($: EngineInterface) => {
       const localUrl = `http://127.0.0.1:${port}`
       await update($, hosting, () => ({
         status: 'running' as const,
-        shareUrls: addresses.map(address => `http://${address}:${port}`),
+        addresses,
+        port,
         localUrl,
         hostKey,
       }))
@@ -378,13 +387,19 @@ export const register: Register = on => {
     const Input = 'Input' in elements ? elements.Input : null
     const current = await read($, connection)
     const hosted = await read($, hosting)
+    const phase = current?.state?.phase
+    // 開局後玩家都已加入，連線資訊收成一行，把高度留給盤面與鍵盤
+    const isRoundOn = phase !== undefined && phase !== 'lobby'
+    const summary = hosted?.status === 'running' ? shareSummary(hosted.addresses) : null
     const hostLine =
       hosted === null ? null : hosted.status === 'starting' ? (
         <Text dimColor>共同服務啟動中…</Text>
+      ) : hosted.status === 'running' && isRoundOn ? (
+        summary === null ? null : <Text color="green">{summary}</Text>
       ) : hosted.status === 'running' ? (
         <Box flexDirection="column">
-          {hosted.shareUrls.map(shareUrl => (
-            <Text key={shareUrl} color="green">{`分享位址：${shareUrl}`}</Text>
+          {hosted.addresses.map(address => (
+            <Text key={address} color="green">{`分享位址：http://${address}:${hosted.port}`}</Text>
           ))}
         </Box>
       ) : hosted.status === 'stopped' ? (
@@ -404,7 +419,6 @@ export const register: Register = on => {
     // 大廳階段、非房主的參賽者才有準備按鈕；房主按開局就算準備
     const me = current.me
     const myEntry = current.state?.players.find(player => player.nickname === me?.nickname)
-    const phase = current.state?.phase
     const readyButton =
       me && !me.isHost && myEntry?.role === 'participant' && phase === 'lobby' ? (
         <Box marginTop={1}>
@@ -436,7 +450,6 @@ export const register: Register = on => {
     const boardView =
       puzzle === undefined || local === null ? null : (
         <Box flexDirection="column" marginTop={1}>
-          {current.state?.difficulty ? <Text dimColor>{`難度：${LEVELS[current.state.difficulty].label}`}</Text> : null}
           {Array.from({ length: 9 }, (_, r) => (
             <Box key={`row-${r}`} flexDirection="column">
               <Box>
@@ -489,9 +502,11 @@ export const register: Register = on => {
                       <Button key={`digit-${d}`} label={d} hotkey={d} onPress={() => void fill($, current.url, puzzle, d)} />
                     )
                   })}
+                  {r === 2 ? (
+                    <Button key="clear" label="清除" hotkey="x" onPress={() => void fill($, current.url, puzzle, BLANK)} />
+                  ) : null}
                 </Box>
               ))}
-              <Button key="clear" label="清除" hotkey="x" onPress={() => void fill($, current.url, puzzle, BLANK)} />
             </Box>
           )}
         </Box>
@@ -527,24 +542,22 @@ export const register: Register = on => {
         </Box>
       ) : null
 
-    // 房主在進行中可以結束本局、結束後可以開始下一局
+    // 房主在進行中可以結束本局、結束後可以開始下一局；和身分、本局狀態、難度排在同一列，省下高度
     const roundAction = phase === undefined ? undefined : ROUND_ACTIONS[phase]
     const roundButton =
       me?.isHost && roundAction ? (
-        <Box marginTop={1}>
-          <Button
-            key={roundAction.key}
-            label={roundAction.label}
-            hotkey={roundAction.hotkey}
-            onPress={() => void postAsPlayer($, current.url, roundAction.path, { credential: me.credential })}
-          />
-        </Box>
+        <Button
+          key={roundAction.key}
+          label={roundAction.label}
+          hotkey={roundAction.hotkey}
+          onPress={() => void postAsPlayer($, current.url, roundAction.path, { credential: me.credential })}
+        />
       ) : null
 
     return (
       <Box flexDirection="column" paddingTop={1} paddingLeft={2}>
         {hostLine}
-        <Text>{`共同服務：${current.url}`}</Text>
+        {isRoundOn ? null : <Text>{`共同服務：${current.url}`}</Text>}
         {current.isConnected ? null : <Text color="red">連線中斷</Text>}
         {current.isExpired ? (
           <Text color="red">原局已失效，請重新加入</Text>
@@ -561,15 +574,17 @@ export const register: Register = on => {
                 autoFocus
                 onSubmit={(value: string) => void joinWithNickname($, current.url, value)}
               />
-            ) : (
-              <Text bold>{`你是 ${me?.nickname ?? ''}${me?.isHost ? HOST_MARK : ''}`}</Text>
-            )}
+            ) : null}
             {me === null && current.joinError ? <Text color="red">{current.joinError}</Text> : null}
-            {current.state ? <Text dimColor>{PHASE_LABELS[current.state.phase]}</Text> : null}
+            <Box gap={2}>
+              {me ? <Text bold>{`你是 ${me.nickname}${me.isHost ? HOST_MARK : ''}`}</Text> : null}
+              {current.state ? <Text dimColor>{PHASE_LABELS[current.state.phase]}</Text> : null}
+              {current.state?.difficulty ? <Text dimColor>{`難度：${LEVELS[current.state.difficulty].label}`}</Text> : null}
+              {roundButton}
+            </Box>
             {myEntry?.role === 'candidate' ? <Text color="yellow">你是候補者，等待下一局</Text> : null}
             {readyButton}
             {startButtons}
-            {roundButton}
             {phase === 'countdown' ? (
               <Text bold color="yellow">{`倒數 ${Math.ceil((current.state?.startsInMs ?? 0) / 1000)} 秒`}</Text>
             ) : null}

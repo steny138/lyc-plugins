@@ -190,7 +190,7 @@ const credentialOf = (service: Service, nickname: string) =>
  * 房主情境：一鍵啟動（假子程序把房主密鑰交給核心）、打開面板、以「Host」加入。
  * 回傳時鐘、面板、假網路與核心；核心在 spawn 時才建立，所以用函式取得。
  */
-const hostAs = async ($: Engine, on: On) => {
+const hostAs = async ($: Engine, on: On, addresses = ['192.168.1.5']) => {
   stubEngine(on)
   const clock = mock.clock(on)
   const holder: { service: Service | null } = { service: null }
@@ -201,7 +201,7 @@ const hostAs = async ($: Engine, on: On) => {
       newCredential: credentials(),
       hostKey: e.env?.SUDOKU_ONLINE_HOST_KEY ?? '',
     })
-    yield { stream: 'stdout' as const, text: '{"port":47900,"addresses":["192.168.1.5"]}\n' }
+    yield { stream: 'stdout' as const, text: `${JSON.stringify({ port: 47900, addresses })}\n` }
     await clock.sleep(24 * 60 * 60 * 1000)
 
     return { value: { code: 0, signal: null } }
@@ -707,6 +707,39 @@ describe('下一局', () => {
     const labels = await Promise.all((await cellButtons(ui)).map(el => cellLabel(ui, el.key!)))
     expect(labels).toHaveLength(81 - 44)
     expect(labels.every(label => label === '·')).toBe(true)
+  })
+})
+
+describe('面板精簡', () => {
+  test('開局後分享位址收成一行、不再顯示共同服務位址；大廳時完整列出', async ($, on) => {
+    const { ui, clock } = await hostAs($, on)
+    expect(await ui.find({ type: 'Text', text: '分享位址：http://192.168.1.5:47900' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '共同服務：http://127.0.0.1:47900' })).toBeDefined()
+
+    await ui.press({ key: 'start-easy' })
+    await clock.advance(5000)
+
+    expect(await ui.find({ type: 'Text', text: '分享：192.168.1.5' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '分享位址：http://192.168.1.5:47900' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '共同服務：http://127.0.0.1:47900' })).toBeUndefined()
+  })
+
+  test('有多個區網位址時，開局後的摘要列出第一個位址與總數', async ($, on) => {
+    const { ui, clock } = await hostAs($, on, ['192.168.0.113', '192.168.139.3'])
+
+    await ui.press({ key: 'start-easy' })
+    await clock.advance(5000)
+
+    expect(await ui.find({ type: 'Text', text: '分享：192.168.0.113 等 2 個位址' })).toBeDefined()
+  })
+
+  test('沒有區網位址時，開局後不顯示空的分享行', async ($, on) => {
+    const { ui, clock } = await hostAs($, on, [])
+
+    await ui.press({ key: 'start-easy' })
+    await clock.advance(5000)
+
+    expect(await ui.find({ type: 'Text', text: '分享：' })).toBeUndefined()
   })
 })
 
