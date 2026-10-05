@@ -493,6 +493,34 @@ describe('共同服務驗證提交', () => {
   })
 })
 
+describe('提交資格', () => {
+  test('同一位參賽者送兩次正確答案只算一次，第二次回原本的名次與用時', () => {
+    const { service, host, answer, roundId } = playingService()
+    postAs(service, '/submit', { credential: host, roundId, cells: answer }, 6000)
+
+    const again = postAs(service, '/submit', { credential: host, roundId, cells: answer }, 9000)
+
+    expect(again.status).toBe(200)
+    expect(JSON.parse(again.text)).toEqual({ rank: 1, elapsedMs: 1000 })
+    expect(publicState(service, 9000).ranking).toEqual([{ nickname: 'Host', rank: 1, elapsedMs: 1000 }])
+  })
+
+  test('候補者送出正確答案不能取得名次', () => {
+    const { service, answer, roundId } = playingService()
+    const late = credentialOf(service, 'Late')
+
+    expect(postAs(service, '/submit', { credential: late, roundId, cells: answer }, 6000).status).toBe(409)
+    expect(publicState(service, 6000).ranking).toEqual([])
+  })
+
+  test('倒數中送出盤面不能取得名次', () => {
+    const { service, host, answer, roundId } = playingService()
+
+    expect(postAs(service, '/submit', { credential: host, roundId, cells: answer }, 4000).status).toBe(409)
+    expect(publicState(service, 6000).ranking).toEqual([])
+  })
+})
+
 describe('本局狀態', () => {
   test('面板顯示本局目前的階段：等待準備、倒數中', async ($, on) => {
     const { ui } = await hostAs($, on)

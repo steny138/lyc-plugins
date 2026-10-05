@@ -142,9 +142,13 @@ export const createService = (
   const submit = (body: Record<string, unknown>, now: number): Response => {
     const player = byCredential(body.credential)
     if (!player) return json(403, { error: '不認得這位玩家' })
+    if (player.role !== 'participant') return json(409, { error: '候補者不能提交' })
     if (round === null || phaseAt(now) !== 'playing') return json(409, { error: '本局還沒開始' })
     // 上一局（或別的局）的盤面不算進這一局
     if (body.roundId !== round.id) return json(409, { error: '這份盤面不屬於本局' })
+    // 已經完成的人再送一次（例如重送）：回原本的名次，不重複計算
+    const done = ranking.find(entry => entry.credential === player.credential)
+    if (done) return json(200, { rank: done.rank, elapsedMs: done.elapsedMs })
     // 題目只有一個解，所以等於本局答案就同時保證：81 格都是 1–9、題目數字沒改、沒有衝突。
     // 不能只看填滿且沒有衝突（spec「答案驗證」）：那樣改了題目數字的盤面也會過
     if (body.cells !== round.solution) return json(400, { error: '盤面不正確' })
