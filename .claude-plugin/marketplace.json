@@ -9,6 +9,11 @@
       "name": "sudoku",
       "source": "./plugins/sudoku",
       "description": "在 Pane 玩數獨：即時出唯一解題目、三種難度、衝突標紅"
+    },
+    {
+      "name": "tetris",
+      "source": "./plugins/tetris",
+      "description": "在 Pane 玩俄羅斯方塊：移植 samtay/tetris 的單機玩法"
     }
   ]
 }

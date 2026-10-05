@@ -1,0 +1,9 @@
+{
+  "name": "tetris",
+  "version": "0.1.0",
+  "description": "在 Pane 玩俄羅斯方塊：移植 samtay/tetris 的單機玩法",
+  "author": {
+    "name": "Steny Liu"
+  },
+  "types": "./types/index.d.ts"
+}
