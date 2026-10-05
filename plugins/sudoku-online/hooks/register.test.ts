@@ -4,6 +4,7 @@ import type { CommandRunInput, On } from 'claude-code'
 
 import { createService } from '../service/core.ts'
 import type { Service } from '../service/core.ts'
+import { solve } from '../service/sudoku.ts'
 
 const PANE = 'sudoku-online'
 
@@ -380,6 +381,31 @@ describe('本機填答', () => {
     await ui.press({ key: 'digit-5' })
 
     expect(publicState(service(), clock.now()).puzzle).toBe(before)
+  })
+})
+
+/** 依答案在面板上填完所有空格（跳過 `except` 指定的格子） */
+const fillAnswer = async (ui: Awaited<ReturnType<typeof mountPane>>, puzzle: string, except: number[] = []) => {
+  const answer = solve(puzzle)!
+  for (let i = 0; i < 81; i++) {
+    if (puzzle[i] !== '.' || except.includes(i)) continue
+    await ui.press({ key: `cell-${i}` })
+    await ui.press({ key: `digit-${answer[i]}` })
+  }
+}
+
+describe('提交與名次', () => {
+  test('房主填完正確盤面後自動提交，面板顯示名次與用時，盤面鎖住', async ($, on) => {
+    const { ui, service, clock } = await playAsHost($, on)
+    const puzzle = publicState(service(), clock.now()).puzzle!
+    await clock.advance(30_000)
+
+    await fillAnswer(ui, puzzle)
+
+    expect(await ui.find({ type: 'Text', text: '你是第 1 名，用時 0:30' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '1. Host 0:30' })).toBeDefined()
+    expect(await cellButtons(ui)).toHaveLength(0)
+    expect(await ui.find({ type: 'Button', key: 'clear' })).toBeUndefined()
   })
 })
 

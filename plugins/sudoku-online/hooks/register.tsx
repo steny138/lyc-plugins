@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import { BLANK, conflicts } from '../service/sudoku.ts'
+import { BLANK, conflicts, isComplete } from '../service/sudoku.ts'
 import type { Board, Difficulty, Me, PlayerSummary, ServiceState } from '../types'
 
 const PANE = 'sudoku-online'
@@ -174,6 +174,34 @@ const postAsPlayer = async ($: EngineInterface, url: string, path: string, body:
     await update($, connection, prev => (prev?.url === url ? { ...prev, actionError } : prev))
   }
   await refresh($, url)
+}
+
+/** 共同服務的名次列表上有沒有這位玩家 */
+const rankOf = (state: ServiceState | null, nickname: string | undefined) =>
+  state?.ranking?.find(entry => entry.nickname === nickname)
+
+/** 本機盤面填完且沒有衝突、共同服務還沒列名次時，把盤面提交給共同服務 */
+const submitIfDone = async ($: EngineInterface, url: string) => {
+  const current = await read($, connection)
+  const local = await read($, board)
+  const state = current?.state ?? null
+  const me = current?.me
+  if (!me || !state || state.phase !== 'playing' || state.roundId === undefined) return
+  if (!local || local.puzzle !== state.puzzle || !isComplete(local.cells) || rankOf(state, me.nickname)) return
+  await postAsPlayer($, url, '/submit', { credential: me.credential, roundId: state.roundId, cells: local.cells })
+}
+
+/** 按數字鍵或清除：填進選取的格子，填完就自動提交 */
+const fill = async ($: EngineInterface, url: string, puzzle: string, value: string) => {
+  await put($, puzzle, value)
+  await submitIfDone($, url)
+}
+
+/** 用時顯示成 m:ss */
+const formatElapsed = (ms: number) => {
+  const seconds = Math.floor(ms / 1000)
+
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }
 
 /** 以存下的玩家憑證向共同服務確認身分；共同服務不認得（例如換了實例）就回 null */
@@ -381,6 +409,9 @@ export const register: Register = on => {
     const puzzle = current.state?.phase === 'playing' && myEntry?.role === 'participant' ? current.state.puzzle : undefined
     const local = puzzle === undefined ? null : boardFor(await read($, board), puzzle)
     const clashing = local === null ? new Set<number>() : conflicts(local.cells)
+    // 共同服務列了名次就鎖住盤面
+    const myRank = rankOf(current.state, me?.nickname)
+    const ranking = current.state?.ranking ?? []
     const boardView =
       puzzle === undefined || local === null ? null : (
         <Box flexDirection="column" marginTop={1}>
@@ -392,7 +423,9 @@ export const register: Register = on => {
                   const i = r * 9 + c
                   const value = local.cells[i] ?? BLANK
                   const cell =
-                    puzzle[i] === BLANK ? (
+                    puzzle[i] === BLANK && myRank ? (
+                      <Text>{value}</Text>
+                    ) : puzzle[i] === BLANK ? (
                       <Button
                         key={`cell-${i}`}
                         label={value === BLANK ? '·' : value}
@@ -419,20 +452,36 @@ export const register: Register = on => {
               {isBoxEdge(r) ? <Text dimColor>{`${'─'.repeat(6)}┼${'─'.repeat(7)}┼${'─'.repeat(6)}`}</Text> : null}
             </Box>
           ))}
-          <Box flexDirection="column" marginTop={1}>
-            {[0, 1, 2].map(r => (
-              <Box key={`keys-${r}`} gap={1}>
-                {[1, 2, 3].map(c => {
-                  const d = String(r * 3 + c)
+          {myRank ? (
+            <Text bold color="green">{`你是第 ${myRank.rank} 名，用時 ${formatElapsed(myRank.elapsedMs)}`}</Text>
+          ) : (
+            <Box flexDirection="column" marginTop={1}>
+              {[0, 1, 2].map(r => (
+                <Box key={`keys-${r}`} gap={1}>
+                  {[1, 2, 3].map(c => {
+                    const d = String(r * 3 + c)
 
-                  return <Button key={`digit-${d}`} label={d} hotkey={d} onPress={() => void put($, puzzle, d)} />
-                })}
-              </Box>
-            ))}
-            <Button key="clear" label="清除" hotkey="x" onPress={() => void put($, puzzle, BLANK)} />
-          </Box>
+                    return (
+                      <Button key={`digit-${d}`} label={d} hotkey={d} onPress={() => void fill($, current.url, puzzle, d)} />
+                    )
+                  })}
+                </Box>
+              ))}
+              <Button key="clear" label="清除" hotkey="x" onPress={() => void fill($, current.url, puzzle, BLANK)} />
+            </Box>
+          )}
         </Box>
       )
+
+    const rankingView =
+      ranking.length > 0 ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>名次</Text>
+          {ranking.map(entry => (
+            <Text key={`rank-${entry.nickname}`}>{`${entry.rank}. ${entry.nickname} ${formatElapsed(entry.elapsedMs)}`}</Text>
+          ))}
+        </Box>
+      ) : null
 
     // 大廳階段的房主才有開局按鈕，一個難度一個
     const startButtons =
@@ -482,6 +531,7 @@ export const register: Register = on => {
             ) : null}
             {current.actionError ? <Text color="red">{current.actionError}</Text> : null}
             {boardView}
+            {rankingView}
             {current.state === null ? (
               <Text dimColor>讀取中…</Text>
             ) : (

@@ -52,8 +52,12 @@ export const createService = (
   { newCredential, hostKey = '', random = Math.random }: ServiceOptions,
 ): Service => {
   const players: Player[] = []
-  /** 本局：開局前為 null；開局後記下難度、題目、答案與正式開始的時間 */
-  let round: { difficulty: Difficulty; puzzle: string; solution: string; startsAt: number } | null = null
+  /** 本局：開局前為 null；開局後記下編號、難度、題目、答案與正式開始的時間 */
+  let round: { id: number; difficulty: Difficulty; puzzle: string; solution: string; startsAt: number } | null = null
+  /** 上一次開局用的編號；每次開局加一 */
+  let lastRoundId = 0
+  /** 本局已完成者，依共同服務收到正確提交的順序排列 */
+  let ranking: { credential: string; nickname: string; rank: number; elapsedMs: number }[] = []
 
   /** 依現在時間判斷本局階段；倒數時間到就算進行中 */
   const phaseAt = (now: number): Phase => (round === null ? 'lobby' : now < round.startsAt ? 'countdown' : 'playing')
@@ -116,7 +120,8 @@ export const createService = (
     if (notReady.length > 0) return json(409, { error: `還有玩家沒準備：${notReady.map(p => p.nickname).join('、')}` })
     // 從這一刻起參賽名單固定；題目現在就出好，但倒數結束前不公開
     const { puzzle, solution } = generate(CLUES[difficulty], random)
-    round = { difficulty, puzzle, solution, startsAt: now + COUNTDOWN_MS }
+    lastRoundId += 1
+    round = { id: lastRoundId, difficulty, puzzle, solution, startsAt: now + COUNTDOWN_MS }
 
     return json(200, { startsInMs: COUNTDOWN_MS })
   }
@@ -133,6 +138,17 @@ export const createService = (
     return json(200, { nickname: target.nickname, role: target.role })
   }
 
+  /** 參賽者提交填完的盤面；名次依共同服務收到的順序，用時從正式開始算到收到這一刻 */
+  const submit = (body: Record<string, unknown>, now: number): Response => {
+    const player = byCredential(body.credential)
+    if (!player) return json(403, { error: '不認得這位玩家' })
+    if (round === null || phaseAt(now) !== 'playing') return json(409, { error: '本局還沒開始' })
+    const entry = { credential: player.credential, nickname: player.nickname, rank: ranking.length + 1, elapsedMs: now - round.startsAt }
+    ranking.push(entry)
+
+    return json(200, { rank: entry.rank, elapsedMs: entry.elapsedMs })
+  }
+
   /** 公開狀態：倒數時附上還剩多久 */
   const state = (now: number) => {
     const phase = phaseAt(now)
@@ -140,9 +156,16 @@ export const createService = (
     return {
       instanceId,
       phase,
+      ...(round ? { roundId: round.id } : {}),
       ...(round && phase === 'countdown' ? { startsInMs: round.startsAt - now } : {}),
       // 題目只在正式開始後公開（spec「公開題目」）
-      ...(round && phase === 'playing' ? { difficulty: round.difficulty, puzzle: round.puzzle } : {}),
+      ...(round && phase === 'playing'
+        ? {
+            difficulty: round.difficulty,
+            puzzle: round.puzzle,
+            ranking: ranking.map(({ nickname, rank, elapsedMs }) => ({ nickname, rank, elapsedMs })),
+          }
+        : {}),
       players: players.map(({ nickname, isHost, isReady, role }) => ({ nickname, isHost, isReady, role })),
     }
   }
@@ -154,6 +177,7 @@ export const createService = (
       if (method === 'POST' && path === '/ready') return ready(parseBody(body), now)
       if (method === 'POST' && path === '/start') return start(parseBody(body), now)
       if (method === 'POST' && path === '/remove') return remove(parseBody(body), now)
+      if (method === 'POST' && path === '/submit') return submit(parseBody(body), now)
 
       return json(404, { error: 'not found' })
     },

@@ -12,11 +12,24 @@ export type PlayerSummary = {
   role: Role
 }
 
+/** 名次列表上的一位完成者 */
+export type RankEntry = {
+  nickname: string
+  /** 名次，從 1 開始，依共同服務收到正確提交的順序 */
+  rank: number
+  /** 用時：正式開始到共同服務收到正確提交的毫秒數 */
+  elapsedMs: number
+}
+
 /** 共同服務 `GET /state` 回傳的狀態 */
 export type ServiceState = {
   /** 共同服務實例識別碼；每次啟動都不同 */
   instanceId: string
   phase: Phase
+  /** 開局後才有：本局編號，提交時帶上，避免把上一局的盤面算進這一局 */
+  roundId?: number
+  /** 進行中才有：已完成者依名次排列 */
+  ranking?: RankEntry[]
   /** 倒數時距離正式開始還有幾毫秒（以共同服務的時間計） */
   startsInMs?: number
   /** 進行中才有：本局難度 */
