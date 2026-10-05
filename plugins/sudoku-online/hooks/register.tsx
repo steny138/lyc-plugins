@@ -1,0 +1,629 @@
+import { atom, read, update } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
+
+import { BLANK, conflicts, isComplete } from '../service/sudoku.ts'
+import type { Board, Difficulty, Me, PlayerSummary, ServiceState } from '../types'
+
+const PANE = 'sudoku-online'
+const TITLE = '數獨對戰'
+/** dock 時的寬度；inline 時的高度 */
+const OPEN_ARGS = { id: PANE, title: TITLE, columns: 72, rows: 26 }
+/** 輪詢共同服務的間隔 */
+const POLL_MS = 1000
+/** 名單與「你是 …」上的房主標示 */
+const HOST_MARK = '（房主）'
+/** 名單上已準備的標示 */
+const READY_MARK = '（已準備）'
+
+/** 各難度的名稱與開局快捷鍵；開局按鈕依這個順序排列 */
+const LEVELS: Record<Difficulty, { label: string; hotkey: string }> = {
+  easy: { label: '簡單', hotkey: 'e' },
+  medium: { label: '中等', hotkey: 'm' },
+  hard: { label: '困難', hotkey: 'h' },
+}
+const DIFFICULTIES = Object.keys(LEVELS) as Difficulty[]
+
+/** 面板上的本局狀態文字 */
+const PHASE_LABELS: Record<ServiceState['phase'], string> = {
+  lobby: '本局：等待準備',
+  countdown: '本局：倒數中',
+  playing: '本局：進行中',
+  ended: '本局：已結束',
+}
+
+/** 房主推進本局的按鈕：key 是按鈕的 key，path 是要送給共同服務的請求 */
+type RoundAction = { key: string; label: string; hotkey: string; path: string }
+
+/** 房主在各階段推進本局的按鈕：進行中結束本局、結束後開始下一局 */
+const ROUND_ACTIONS: Partial<Record<ServiceState['phase'], RoundAction>> = {
+  playing: { key: 'end', label: '結束本局', hotkey: 'q', path: '/end' },
+  ended: { key: 'next', label: '下一局', hotkey: 'n', path: '/next' },
+}
+
+/** 第 n 列（或行）之後是宮與宮的邊界 */
+const isBoxEdge = (n: number) => n === 2 || n === 5
+
+const connection = atom({ plugin: 'sudoku-online', key: 'connection' } as const, null)
+const hosting = atom({ plugin: 'sudoku-online', key: 'hosting' } as const, null)
+const board = atom({ plugin: 'sudoku-online', key: 'board' } as const, null)
+
+/** 本機盤面：屬於這道題就沿用，換了題（或還沒填過）就從題目重來 */
+const boardFor = (prev: Board | null, puzzle: string): Board =>
+  prev?.puzzle === puzzle ? prev : { puzzle, cells: puzzle, selected: null }
+
+/** 選取一格（題目格不能選） */
+const select = ($: EngineInterface, puzzle: string, i: number) =>
+  update($, board, prev => {
+    const current = boardFor(prev, puzzle)
+
+    return puzzle[i] === BLANK ? { ...current, selected: i } : current
+  })
+
+/** 在選取的格子填入數字；`BLANK` 為清除。沒有選取時不變 */
+const put = ($: EngineInterface, puzzle: string, value: string) =>
+  update($, board, prev => {
+    const current = boardFor(prev, puzzle)
+    if (current.selected === null) return current
+    const i = current.selected
+
+    return { ...current, cells: current.cells.slice(0, i) + value + current.cells.slice(i + 1) }
+  })
+
+/** 共同服務啟動時在 stdout 印出的第一行 */
+type Listening = { port: number; addresses: string[] }
+
+/** 向共同服務讀取目前狀態，存進 connection；連不上時只標記中斷，保留最後的狀態 */
+const refresh = async ($: EngineInterface, url: string) => {
+  let state: ServiceState | null = null
+  try {
+    const response = await $.http.fetch(`${url}/state`)
+    if (response.ok) state = JSON.parse(response.text) as ServiceState
+  } catch {
+    // 連不上：交給下面標記為中斷
+  }
+  await update($, connection, prev => {
+    if (prev?.url !== url || prev.isExpired) return prev
+    if (state === null) return { ...prev, isConnected: false }
+    // 實例識別碼改變：共同服務重啟過，原局已失效，不採用新實例的狀態
+    if (prev.state && prev.state.instanceId !== state.instanceId) return { ...prev, isConnected: true, isExpired: true }
+
+    return { ...prev, state, isConnected: true }
+  })
+}
+
+/** Pane 開著、已畫在畫面上、且是目前顯示的分頁 */
+const isPaneVisible = async ($: EngineInterface): Promise<boolean> =>
+  (await $.ui.panes()).some(pane => pane.id === PANE && pane.isPlaced && pane.isShown)
+
+/** 解析 JSON；讀不懂為 null */
+const parseOrNull = (text: string): unknown => {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 送出結果：成功帶解析後的回應（讀不懂為 null），被拒絕帶共同服務給的原因；
+ * 連不上、或被拒絕時回應讀不懂為 null
+ */
+type Sent = { ok: true; value: unknown } | { ok: false; error: string } | null
+
+/** 對共同服務送出 POST；被拒絕時取出它給的原因，沒有就用 fallback */
+const send = async (
+  $: EngineInterface,
+  url: string,
+  path: string,
+  body: Record<string, unknown>,
+  fallback: string,
+): Promise<Sent> => {
+  try {
+    const response = await $.http.fetch(`${url}${path}`, { method: 'POST', body: JSON.stringify(body) })
+    // 成功就算數；回應讀不懂只影響需要內容的呼叫端（加入）
+    if (response.ok) return { ok: true, value: parseOrNull(response.text) }
+    const { error } = JSON.parse(response.text) as { error?: string }
+
+    return { ok: false, error: error ?? fallback }
+  } catch {
+    // 連不上或回應讀不懂：呼叫端接著 refresh，由它標記中斷
+    return null
+  }
+}
+
+/** 以暱稱加入共同服務，存下共同服務發給的身分，再讀回名單 */
+const joinWithNickname = async ($: EngineInterface, url: string, nickname: string) => {
+  // 房主連自己啟動的共同服務時帶上房主密鑰，取得房主身分
+  const hosted = await read($, hosting)
+  const hostKey = hosted?.status === 'running' && hosted.localUrl === url ? hosted.hostKey : undefined
+  const sent = await send($, url, '/join', { nickname, hostKey }, '加入失敗')
+  if (sent?.ok) {
+    // 回應讀不懂就不寫回身分，交給 refresh
+    if (sent.value !== null) {
+      const me = sent.value as Me
+      await update($, connection, prev => (prev?.url === url ? { ...prev, me, joinError: null } : prev))
+    }
+  } else if (sent) {
+    // 共同服務是暱稱規則的唯一依據：直接顯示它給的原因
+    await update($, connection, prev => (prev?.url === url ? { ...prev, joinError: sent.error } : prev))
+  }
+  await refresh($, url)
+}
+
+/** 目前的輪詢計時器；模組重新載入時歸零，由下一次 join 重新啟動 */
+let poller: Timer | null = null
+
+/** 每次輪詢：讀回最新狀態；填完卻還沒取得名次（例如提交時連不上）就重送 */
+const poll = async ($: EngineInterface, url: string) => {
+  await refresh($, url)
+  await submitIfDone($, url)
+}
+
+/** 每秒輪詢共同服務；寫入 connection 會讓面板重畫，所以輪詢只要更新狀態 */
+const startPolling = ($: EngineInterface, url: string) => {
+  poller?.cancel()
+  poller = $.clock.every(POLL_MS, () => void poll($, url))
+}
+
+/** 停止輪詢；面板關閉時呼叫 */
+const stopPolling = () => {
+  poller?.cancel()
+  poller = null
+}
+
+/** 已經加入過共同服務時，立刻讀一次最新狀態並恢復輪詢；面板打開或重載後呼叫 */
+const resume = async ($: EngineInterface) => {
+  const current = await read($, connection)
+  if (current === null) return
+  await refresh($, current.url)
+  startPolling($, current.url)
+}
+
+/**
+ * 以玩家身分送出操作（準備、開局、移出），再讀回狀態。
+ * 共同服務拒絕時把原因存進 actionError 顯示在面板；成功就清掉。
+ */
+const postAsPlayer = async ($: EngineInterface, url: string, path: string, body: Record<string, unknown>) => {
+  const sent = await send($, url, path, body, '操作失敗')
+  if (sent) {
+    const actionError = sent.ok ? null : sent.error
+    await update($, connection, prev => (prev?.url === url ? { ...prev, actionError } : prev))
+  }
+  await refresh($, url)
+}
+
+/** 共同服務的名次列表上有沒有這位玩家 */
+const rankOf = (state: ServiceState | null, nickname: string | undefined) =>
+  state?.ranking?.find(entry => entry.nickname === nickname)
+
+/** 本機盤面填完且沒有衝突、共同服務還沒列名次時，把盤面提交給共同服務 */
+const submitIfDone = async ($: EngineInterface, url: string) => {
+  const current = await read($, connection)
+  const local = await read($, board)
+  const state = current?.state ?? null
+  const me = current?.me
+  // 原局已失效：位址上是另一個共同服務實例，不認得這份盤面與玩家憑證
+  if (!me || !state || current?.isExpired || state.phase !== 'playing' || state.roundId === undefined) return
+  if (!local || local.puzzle !== state.puzzle || !isComplete(local.cells) || rankOf(state, me.nickname)) return
+  await postAsPlayer($, url, '/submit', { credential: me.credential, roundId: state.roundId, cells: local.cells })
+}
+
+/** 按數字鍵或清除：填進選取的格子，填完就自動提交 */
+const fill = async ($: EngineInterface, url: string, puzzle: string, value: string) => {
+  await put($, puzzle, value)
+  await submitIfDone($, url)
+}
+
+/** 開局後的分享位址摘要：只列第一個位址，其餘以數量帶過；沒有區網位址為 null */
+const shareSummary = (addresses: string[]) =>
+  addresses.length === 0
+    ? null
+    : addresses.length > 1
+      ? `分享：${addresses[0]} 等 ${addresses.length} 個位址`
+      : `分享：${addresses[0]}`
+
+/** 用時顯示成 m:ss */
+const formatElapsed = (ms: number) => {
+  const seconds = Math.floor(ms / 1000)
+
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+/** 以存下的玩家憑證向共同服務確認身分；共同服務不認得（例如換了實例）就回 null */
+const confirmMe = async ($: EngineInterface, url: string, me: Me): Promise<Me | null> => {
+  try {
+    const response = await $.http.fetch(`${url}/join`, {
+      method: 'POST',
+      body: JSON.stringify({ credential: me.credential }),
+    })
+    const confirmed = response.ok ? (JSON.parse(response.text) as Me) : null
+
+    return confirmed?.credential === me.credential ? confirmed : null
+  } catch {
+    // 連不上就先沿用本機的身分，輪詢會標記中斷
+    return me
+  }
+}
+
+/** 連上共同服務並開始輪詢；對同一個共同服務再加入時，沿用原本的玩家身分 */
+const connect = async ($: EngineInterface, url: string) => {
+  const prev = await read($, connection)
+  const me = prev?.url === url && prev.me && !prev.isExpired ? await confirmMe($, url, prev.me) : null
+  await update($, connection, () => ({
+    url,
+    state: null,
+    isConnected: false,
+    isExpired: false,
+    me,
+    joinError: null,
+    actionError: null,
+  }))
+  await refresh($, url)
+  startPolling($, url)
+}
+
+/** 共同服務子程序的輸出串流；結束這個串流就會結束子程序 */
+let hostChild: AsyncGenerator<unknown, unknown> | null = null
+/** 房主主動停止共同服務的原因；子程序因此結束時用它代替失敗原因 */
+let stopReason: string | null = null
+
+/** 房主停止共同服務：結束串流，引擎隨之結束子程序 */
+const stopHosting = (reason: string) => {
+  if (hostChild === null) return
+  stopReason = reason
+  void hostChild.return(undefined)
+  hostChild = null
+}
+
+/**
+ * 以 Node 子程序啟動共同服務。子程序活多久，這個迴圈就跑多久；
+ * 房主關閉面板或模組卸載時子程序結束（ADR 0001）。
+ */
+const host = async ($: EngineInterface) => {
+  await update($, hosting, () => ({ status: 'starting' as const }))
+  let stdout = ''
+  let stderr = ''
+  let reason: string
+  stopReason = null
+  // 只有房主 mod 知道這串密鑰，區網上的其他人搶不走房主身分
+  const hostKey = crypto.randomUUID()
+  try {
+    const child = $.process.spawn({
+      argv: ['node', `${$.plugin.root}/service/server.ts`],
+      env: { SUDOKU_ONLINE_HOST_KEY: hostKey },
+    })
+    hostChild = child
+    for await (const { stream, text } of child) {
+      if (stream === 'stderr') {
+        stderr += text
+        continue
+      }
+      stdout += text
+      const newline = stdout.indexOf('\n')
+      if (newline === -1 || (await read($, hosting))?.status === 'running') continue
+      const { port, addresses } = JSON.parse(stdout.slice(0, newline)) as Listening
+      const localUrl = `http://127.0.0.1:${port}`
+      await update($, hosting, () => ({
+        status: 'running' as const,
+        addresses,
+        port,
+        localUrl,
+        hostKey,
+      }))
+      await connect($, localUrl)
+    }
+    reason = stderr.trim().split('\n').at(-1) || '共同服務已結束'
+  } catch (error) {
+    reason = error instanceof Error ? error.message : String(error)
+  }
+  hostChild = null
+  const stopped = stopReason
+  await update($, hosting, () =>
+    stopped === null ? { status: 'failed' as const, reason } : { status: 'stopped' as const, reason: stopped },
+  )
+}
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    await $.command.register({
+      name: 'sudoku-online',
+      description: '數獨對戰：/sudoku-online host 啟動共同服務、/sudoku-online join <位址> 加入',
+    })
+    // 熱重載也會走到這裡：引擎卸載舊模組時已結束共同服務子程序（ADR 0001），
+    // 但 hosting 存在 session 狀態裡不會清掉，要改成已中止
+    await update($, hosting, prev =>
+      prev?.status === 'running' || prev?.status === 'starting'
+        ? { status: 'failed' as const, reason: '模組重新載入，共同服務已中止' }
+        : prev,
+    )
+    // 輪詢計時器是模組變數，重載後就沒了；面板還看得到就接著輪詢
+    if (await isPaneVisible($)) await resume($)
+
+    return next(e)
+  })
+
+  on('command.run', { command: 'sudoku-online' }, async ($, e) => {
+    const [action, url] = e.args.trim().split(/\s+/)
+    if (action === 'host') {
+      void host($)
+      await $.ui.open(OPEN_ARGS)
+
+      return { text: '正在啟動共同服務…' }
+    }
+    if (action === 'join' && url) {
+      await connect($, url)
+      await $.ui.open(OPEN_ARGS)
+
+      return { text: `已連線共同服務 ${url}。` }
+    }
+    // 不帶參數時是開關：看得到就關掉，否則打開
+    if (await isPaneVisible($)) {
+      await $.ui.close({ id: PANE })
+
+      return { text: '數獨對戰面板已關閉。' }
+    }
+    await resume($)
+    await $.ui.open(OPEN_ARGS)
+
+    return { text: '數獨對戰面板已開啟。' }
+  })
+
+  // 按 ✕ 或再執行一次指令都會走到這裡；模組卸載（unload）時引擎不會呼叫這個 hook
+  on('ui.close', async ($, e, next) => {
+    const closed = await next(e)
+    if (e.id === PANE) {
+      stopPolling()
+      // 房主關閉面板就結束共同服務，本局隨之中止
+      stopHosting('房主關閉了面板')
+    }
+
+    return closed
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const elements = $.ui.resolve(e)
+    const { Box, Button, Text } = elements
+    // 行動版沒有輸入框（claude-code.d.ts 的 Elements.mobile），只能在電腦上輸入暱稱
+    const Input = 'Input' in elements ? elements.Input : null
+    const current = await read($, connection)
+    const hosted = await read($, hosting)
+    const phase = current?.state?.phase
+    // 開局後玩家都已加入，連線資訊收成一行，把高度留給盤面與鍵盤
+    const isRoundOn = phase !== undefined && phase !== 'lobby'
+    const summary = hosted?.status === 'running' ? shareSummary(hosted.addresses) : null
+    const hostLine =
+      hosted === null ? null : hosted.status === 'starting' ? (
+        <Text dimColor>共同服務啟動中…</Text>
+      ) : hosted.status === 'running' && isRoundOn ? (
+        summary === null ? null : <Text color="green">{summary}</Text>
+      ) : hosted.status === 'running' ? (
+        <Box flexDirection="column">
+          {hosted.addresses.map(address => (
+            <Text key={address} color="green">{`分享位址：http://${address}:${hosted.port}`}</Text>
+          ))}
+        </Box>
+      ) : hosted.status === 'stopped' ? (
+        <Text color="yellow">{`共同服務已停止：${hosted.reason}`}</Text>
+      ) : (
+        <Text color="red">{`共同服務啟動失敗：${hosted.reason}`}</Text>
+      )
+    if (current === null) {
+      return (
+        <Box flexDirection="column" paddingTop={1} paddingLeft={2}>
+          {hostLine}
+          <Text dimColor>輸入 /sudoku-online host 啟動共同服務，或 /sudoku-online join &lt;位址&gt; 加入</Text>
+        </Box>
+      )
+    }
+
+    // 大廳階段、非房主的參賽者才有準備按鈕；房主按開局就算準備
+    const me = current.me
+    const myEntry = current.state?.players.find(player => player.nickname === me?.nickname)
+    const readyButton =
+      me && !me.isHost && myEntry?.role === 'participant' && phase === 'lobby' ? (
+        <Box marginTop={1}>
+          <Button
+            key="ready"
+            label={myEntry.isReady ? '取消準備' : '準備'}
+            hotkey="r"
+            onPress={() => void postAsPlayer($, current.url, '/ready', { credential: me.credential, isReady: !myEntry.isReady })}
+          />
+        </Box>
+      ) : null
+
+    const participants = current.state?.players.filter(player => player.role === 'participant') ?? []
+    const candidates = current.state?.players.filter(player => player.role === 'candidate') ?? []
+    // 房主在大廳可以移出還沒準備的參賽者（不含自己）
+    const canRemove = (player: PlayerSummary) =>
+      me?.isHost === true && phase === 'lobby' && !player.isHost && !player.isReady
+
+    // 共同服務公開題目時（進行中與結束後）參賽者看得到盤面；候補者沒有
+    const puzzle = myEntry?.role === 'participant' ? current.state?.puzzle : undefined
+    const local = puzzle === undefined ? null : boardFor(await read($, board), puzzle)
+    const clashing = local === null ? new Set<number>() : conflicts(local.cells)
+    // 共同服務列了名次、或本局已結束，就鎖住盤面
+    const myRank = rankOf(current.state, me?.nickname)
+    const isLocked = myRank !== undefined || phase === 'ended'
+    // 填完但共同服務還沒列名次（例如提交時連不上）：進行中每次輪詢都會重送，結束後就不補列了
+    const isUnconfirmed = !myRank && local !== null && isComplete(local.cells)
+    const ranking = current.state?.ranking ?? []
+    const boardView =
+      puzzle === undefined || local === null ? null : (
+        <Box flexDirection="column" marginTop={1}>
+          {Array.from({ length: 9 }, (_, r) => (
+            <Box key={`row-${r}`} flexDirection="column">
+              <Box>
+                {Array.from({ length: 9 }, (_, c) => {
+                  const i = r * 9 + c
+                  const value = local.cells[i] ?? BLANK
+                  const cell =
+                    puzzle[i] === BLANK && isLocked ? (
+                      <Text>{value}</Text>
+                    ) : puzzle[i] === BLANK ? (
+                      <Button
+                        key={`cell-${i}`}
+                        label={value === BLANK ? '·' : value}
+                        plain
+                        onPress={() => void select($, puzzle, i)}
+                      />
+                    ) : (
+                      <Text bold color={clashing.has(i) ? 'red' : undefined}>
+                        {puzzle[i]}
+                      </Text>
+                    )
+                  // 衝突優先於選取
+                  const background =
+                    puzzle[i] === BLANK && clashing.has(i) ? 'red' : local.selected === i ? 'blue' : undefined
+
+                  return (
+                    <Box key={`col-${i}`}>
+                      {background ? <Box backgroundColor={background}>{cell}</Box> : cell}
+                      {isBoxEdge(c) ? <Text dimColor>{' │ '}</Text> : c < 8 ? <Text> </Text> : null}
+                    </Box>
+                  )
+                })}
+              </Box>
+              {isBoxEdge(r) ? <Text dimColor>{`${'─'.repeat(6)}┼${'─'.repeat(7)}┼${'─'.repeat(6)}`}</Text> : null}
+            </Box>
+          ))}
+          {myRank ? (
+            <Text bold color="green">{`你是第 ${myRank.rank} 名，用時 ${formatElapsed(myRank.elapsedMs)}`}</Text>
+          ) : null}
+          {isUnconfirmed && phase === 'playing' ? <Text color="yellow">已完成，尚未取得共同服務確認</Text> : null}
+          {isUnconfirmed && phase === 'ended' ? <Text color="red">本局已結束，未取得名次</Text> : null}
+          {isLocked ? null : (
+            <Box flexDirection="column" marginTop={1}>
+              {[0, 1, 2].map(r => (
+                <Box key={`keys-${r}`} gap={1}>
+                  {[1, 2, 3].map(c => {
+                    const d = String(r * 3 + c)
+
+                    return (
+                      <Button key={`digit-${d}`} label={d} hotkey={d} onPress={() => void fill($, current.url, puzzle, d)} />
+                    )
+                  })}
+                  {r === 2 ? (
+                    <Button key="clear" label="清除" hotkey="x" onPress={() => void fill($, current.url, puzzle, BLANK)} />
+                  ) : null}
+                </Box>
+              ))}
+            </Box>
+          )}
+        </Box>
+      )
+
+    // 本局結束後，沒有名次的參賽者列在名次之後
+    const unfinished = phase === 'ended' ? participants.filter(player => !rankOf(current.state, player.nickname)) : []
+    const rankingView =
+      ranking.length > 0 || unfinished.length > 0 ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>名次</Text>
+          {ranking.map(entry => (
+            <Text key={`rank-${entry.nickname}`}>{`${entry.rank}. ${entry.nickname} ${formatElapsed(entry.elapsedMs)}`}</Text>
+          ))}
+          {unfinished.length > 0 ? (
+            <Text dimColor>{`未完成：${unfinished.map(player => player.nickname).join('、')}`}</Text>
+          ) : null}
+        </Box>
+      ) : null
+
+    // 大廳階段的房主才有開局按鈕，一個難度一個
+    const startButtons =
+      me?.isHost && phase === 'lobby' ? (
+        <Box marginTop={1} gap={1}>
+          {DIFFICULTIES.map(difficulty => (
+            <Button
+              key={`start-${difficulty}`}
+              label={`開局：${LEVELS[difficulty].label}`}
+              hotkey={LEVELS[difficulty].hotkey}
+              onPress={() => void postAsPlayer($, current.url, '/start', { credential: me.credential, difficulty })}
+            />
+          ))}
+        </Box>
+      ) : null
+
+    // 房主在進行中可以結束本局、結束後可以開始下一局；和身分、本局狀態、難度排在同一列，省下高度
+    const roundAction = phase === undefined ? undefined : ROUND_ACTIONS[phase]
+    const roundButton =
+      me?.isHost && roundAction ? (
+        <Button
+          key={roundAction.key}
+          label={roundAction.label}
+          hotkey={roundAction.hotkey}
+          onPress={() => void postAsPlayer($, current.url, roundAction.path, { credential: me.credential })}
+        />
+      ) : null
+
+    return (
+      <Box flexDirection="column" paddingTop={1} paddingLeft={2}>
+        {hostLine}
+        {isRoundOn ? null : <Text>{`共同服務：${current.url}`}</Text>}
+        {current.isConnected ? null : <Text color="red">連線中斷</Text>}
+        {current.isExpired ? (
+          <Text color="red">原局已失效，請重新加入</Text>
+        ) : (
+          <Box flexDirection="column" marginTop={1}>
+            {me === null && Input === null ? (
+              <Text dimColor>請在電腦上的 Claude Code 輸入暱稱加入</Text>
+            ) : me === null && Input !== null ? (
+              <Input
+                key="nickname"
+                label="暱稱："
+                placeholder="輸入暱稱後按 Enter 加入"
+                submitLabel="加入"
+                autoFocus
+                onSubmit={(value: string) => void joinWithNickname($, current.url, value)}
+              />
+            ) : null}
+            {me === null && current.joinError ? <Text color="red">{current.joinError}</Text> : null}
+            <Box gap={2}>
+              {me ? <Text bold>{`你是 ${me.nickname}${me.isHost ? HOST_MARK : ''}`}</Text> : null}
+              {current.state ? <Text dimColor>{PHASE_LABELS[current.state.phase]}</Text> : null}
+              {current.state?.difficulty ? <Text dimColor>{`難度：${LEVELS[current.state.difficulty].label}`}</Text> : null}
+              {roundButton}
+            </Box>
+            {myEntry?.role === 'candidate' ? <Text color="yellow">你是候補者，等待下一局</Text> : null}
+            {readyButton}
+            {startButtons}
+            {phase === 'countdown' ? (
+              <Text bold color="yellow">{`倒數 ${Math.ceil((current.state?.startsInMs ?? 0) / 1000)} 秒`}</Text>
+            ) : null}
+            {current.actionError ? <Text color="red">{current.actionError}</Text> : null}
+            {boardView}
+            {rankingView}
+            {current.state === null ? (
+              <Text dimColor>讀取中…</Text>
+            ) : (
+              <Box flexDirection="column" marginTop={1}>
+                <Text dimColor>{`玩家（${participants.length}）`}</Text>
+                {participants.map(player => (
+                  <Box key={`player-${player.nickname}`} gap={1}>
+                    <Text>{`・${player.nickname}${player.isHost ? HOST_MARK : ''}${player.isReady ? READY_MARK : ''}`}</Text>
+                    {canRemove(player) && me ? (
+                      <Button
+                        key={`remove-${player.nickname}`}
+                        label="移出"
+                        plain
+                        onPress={() =>
+                          void postAsPlayer($, current.url, '/remove', { credential: me.credential, nickname: player.nickname })
+                        }
+                      />
+                    ) : null}
+                  </Box>
+                ))}
+                {candidates.length > 0 ? (
+                  <Box flexDirection="column" marginTop={1}>
+                    <Text dimColor>{`候補者（${candidates.length}）`}</Text>
+                    {candidates.map(player => (
+                      <Text key={`candidate-${player.nickname}`} dimColor>{`・${player.nickname}`}</Text>
+                    ))}
+                  </Box>
+                ) : null}
+              </Box>
+            )}
+          </Box>
+        )}
+      </Box>
+    )
+  })
+}

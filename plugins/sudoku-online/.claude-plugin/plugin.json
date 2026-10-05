@@ -1,0 +1,7 @@
+{
+  "name": "sudoku-online",
+  "version": "0.1.0",
+  "description": "區域網路數獨對戰（技術驗證骨架）",
+  "author": { "name": "Steny Liu" },
+  "types": "./types/index.d.ts"
+}
