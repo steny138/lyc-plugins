@@ -283,6 +283,8 @@ const publicState = (service: Service, now: number) =>
     phase: string
     difficulty?: string
     puzzle?: string
+    roundId?: number
+    ranking?: { nickname: string; rank: number; elapsedMs: number }[]
   }
 
 /** 面板上可以點的格子（空格） */
@@ -406,6 +408,28 @@ describe('提交與名次', () => {
     expect(await ui.find({ type: 'Text', text: '1. Host 0:30' })).toBeDefined()
     expect(await cellButtons(ui)).toHaveLength(0)
     expect(await ui.find({ type: 'Button', key: 'clear' })).toBeUndefined()
+  })
+
+  test('Bob 先完成、房主後完成時依共同服務收到的順序排名，Bob 完成後房主仍能作答', async ($, on) => {
+    const { ui, service, clock } = await hostAs($, on)
+    const bob = credentialOf(service(), 'Bob')
+    postAs(service(), '/ready', { credential: bob, isReady: true })
+    await clock.advance(1000)
+    await ui.press({ key: 'start-easy' })
+    await clock.advance(5000)
+    const { puzzle, roundId } = publicState(service(), clock.now())
+    await clock.advance(20_000)
+
+    const bobResult = postAs(service(), '/submit', { credential: bob, roundId, cells: solve(puzzle!) }, clock.now())
+    expect(JSON.parse(bobResult.text)).toEqual({ rank: 1, elapsedMs: 20_000 })
+    await clock.advance(10_000)
+    expect(publicState(service(), clock.now()).phase).toBe('playing')
+
+    await fillAnswer(ui, puzzle!)
+
+    expect(await ui.find({ type: 'Text', text: '你是第 2 名，用時 0:30' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '1. Bob 0:20' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '2. Host 0:30' })).toBeDefined()
   })
 })
 
