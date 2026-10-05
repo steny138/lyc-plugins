@@ -226,6 +226,15 @@ test('空間不足時說明尺寸，仍能手動暫停而不自動暫停', async
   await ui.press({ key: 'pause' })
   expect(await ui.find({ type: 'Text', text: '已暫停' })).toBeDefined()
 })
+test('最少列數等於版面實際高度：並排 20 列、直排 31 列、窄版 34 列', async ($, on) => {
+  stubEngine(on); mock.clock(on); await run($)
+  for (const [columns, rows, fits] of [[42, 20, true], [42, 19, false], [41, 31, true], [41, 30, false], [30, 34, true], [30, 33, false]] as const) {
+    const ui = await mountPane($, columns, rows)
+    expect(await ui.find({ key: 'board' }) !== undefined).toBe(fits)
+    expect(await ui.find({ type: 'Text', text: /面板至少需要/ }) !== undefined).toBe(!fits)
+    await ui.unmount()
+  }
+})
 test('下一塊預覽顯示 O 的二乘二形狀', async ($, on) => {
   stubEngine(on); mock.clock(on); await run($); const ui = await mountPane($)
   expect(await ui.find({ type: 'Text', text: 'OOOO\nOOOO' })).toBeDefined()
