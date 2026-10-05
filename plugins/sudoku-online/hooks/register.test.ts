@@ -545,6 +545,61 @@ describe('完成時連不上', () => {
   })
 })
 
+describe('結束本局', () => {
+  test('房主結束本局後，名次之後列出未完成的參賽者；不是房主的人不能結束', async ($, on) => {
+    const { ui, service, clock } = await hostAs($, on)
+    const bob = credentialOf(service(), 'Bob')
+    const carol = credentialOf(service(), 'Carol')
+    postAs(service(), '/ready', { credential: bob, isReady: true })
+    postAs(service(), '/ready', { credential: carol, isReady: true })
+    await clock.advance(1000)
+    await ui.press({ key: 'start-easy' })
+    await clock.advance(5000)
+    const { puzzle, roundId } = publicState(service(), clock.now())
+    await clock.advance(20_000)
+    postAs(service(), '/submit', { credential: bob, roundId, cells: solve(puzzle!) }, clock.now())
+    expect(postAs(service(), '/end', { credential: carol }, clock.now()).status).toBe(403)
+    await clock.advance(1000)
+
+    await ui.press({ key: 'end' })
+
+    expect(await ui.find({ type: 'Text', text: '本局：已結束' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '1. Bob 0:20' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '未完成：Host、Carol' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'end' })).toBeUndefined()
+  })
+
+  test('填完時連不上、房主在這期間結束本局，恢復後顯示本局已結束、未取得名次', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    const service = createService('instance-1', { newCredential: credentials(), hostKey: 'key' })
+    const host = (JSON.parse(postAs(service, '/join', { nickname: 'Host', hostKey: 'key' }).text) as { credential: string })
+      .credential
+    const network: Network = { isDown: false }
+    routeFetch(on, service, network, clock)
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+    await ui.input({ key: 'nickname', text: 'Bob' })
+    await ui.press({ key: 'ready' })
+    postAs(service, '/start', { credential: host, difficulty: 'easy' }, clock.now())
+    await clock.advance(5000)
+    const puzzle = publicState(service, clock.now()).puzzle!
+    const last = puzzle.lastIndexOf('.')
+    await fillAnswer(ui, puzzle, [last])
+
+    network.isDown = true
+    await ui.press({ key: `cell-${last}` })
+    await ui.press({ key: `digit-${solve(puzzle)![last]}` })
+    expect(postAs(service, '/end', { credential: host }, clock.now()).status).toBe(200)
+    network.isDown = false
+    await clock.advance(1000)
+
+    expect(await ui.find({ type: 'Text', text: '本局已結束，未取得名次' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '已完成，尚未取得共同服務確認' })).toBeUndefined()
+    expect(publicState(service, clock.now()).ranking).toEqual([])
+  })
+})
+
 describe('本局狀態', () => {
   test('面板顯示本局目前的階段：等待準備、倒數中', async ($, on) => {
     const { ui } = await hostAs($, on)

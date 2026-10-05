@@ -28,6 +28,7 @@ const PHASE_LABELS: Record<ServiceState['phase'], string> = {
   lobby: '本局：等待準備',
   countdown: '本局：倒數中',
   playing: '本局：進行中',
+  ended: '本局：已結束',
 }
 
 /** 第 n 列（或行）之後是宮與宮的邊界 */
@@ -411,14 +412,16 @@ export const register: Register = on => {
     const canRemove = (player: PlayerSummary) =>
       me?.isHost === true && current.state?.phase === 'lobby' && !player.isHost && !player.isReady
 
-    // 進行中的參賽者看得到盤面；候補者沒有
-    const puzzle = current.state?.phase === 'playing' && myEntry?.role === 'participant' ? current.state.puzzle : undefined
+    // 進行中與結束後的參賽者看得到盤面；候補者沒有
+    const phase = current.state?.phase
+    const puzzle = (phase === 'playing' || phase === 'ended') && myEntry?.role === 'participant' ? current.state?.puzzle : undefined
     const local = puzzle === undefined ? null : boardFor(await read($, board), puzzle)
     const clashing = local === null ? new Set<number>() : conflicts(local.cells)
-    // 共同服務列了名次就鎖住盤面
+    // 共同服務列了名次、或本局已結束，就鎖住盤面
     const myRank = rankOf(current.state, me?.nickname)
-    // 填完但共同服務還沒列名次（例如提交時連不上）：每次輪詢都會重送
-    const isPending = !myRank && local !== null && isComplete(local.cells)
+    const isLocked = myRank !== undefined || phase === 'ended'
+    // 填完但共同服務還沒列名次（例如提交時連不上）：進行中每次輪詢都會重送，結束後就不補列了
+    const isUnconfirmed = !myRank && local !== null && isComplete(local.cells)
     const ranking = current.state?.ranking ?? []
     const boardView =
       puzzle === undefined || local === null ? null : (
@@ -431,7 +434,7 @@ export const register: Register = on => {
                   const i = r * 9 + c
                   const value = local.cells[i] ?? BLANK
                   const cell =
-                    puzzle[i] === BLANK && myRank ? (
+                    puzzle[i] === BLANK && isLocked ? (
                       <Text>{value}</Text>
                     ) : puzzle[i] === BLANK ? (
                       <Button
@@ -463,8 +466,9 @@ export const register: Register = on => {
           {myRank ? (
             <Text bold color="green">{`你是第 ${myRank.rank} 名，用時 ${formatElapsed(myRank.elapsedMs)}`}</Text>
           ) : null}
-          {isPending ? <Text color="yellow">已完成，尚未取得共同服務確認</Text> : null}
-          {myRank ? null : (
+          {isUnconfirmed && phase === 'playing' ? <Text color="yellow">已完成，尚未取得共同服務確認</Text> : null}
+          {isUnconfirmed && phase === 'ended' ? <Text color="red">本局已結束，未取得名次</Text> : null}
+          {isLocked ? null : (
             <Box flexDirection="column" marginTop={1}>
               {[0, 1, 2].map(r => (
                 <Box key={`keys-${r}`} gap={1}>
@@ -483,13 +487,31 @@ export const register: Register = on => {
         </Box>
       )
 
+    // 本局結束後，沒有名次的參賽者列在名次之後
+    const unfinished = phase === 'ended' ? participants.filter(player => !rankOf(current.state, player.nickname)) : []
     const rankingView =
-      ranking.length > 0 ? (
+      ranking.length > 0 || unfinished.length > 0 ? (
         <Box flexDirection="column" marginTop={1}>
           <Text dimColor>名次</Text>
           {ranking.map(entry => (
             <Text key={`rank-${entry.nickname}`}>{`${entry.rank}. ${entry.nickname} ${formatElapsed(entry.elapsedMs)}`}</Text>
           ))}
+          {unfinished.length > 0 ? (
+            <Text dimColor>{`未完成：${unfinished.map(player => player.nickname).join('、')}`}</Text>
+          ) : null}
+        </Box>
+      ) : null
+
+    // 進行中的房主可以結束本局
+    const endButton =
+      me?.isHost && phase === 'playing' ? (
+        <Box marginTop={1}>
+          <Button
+            key="end"
+            label="結束本局"
+            hotkey="q"
+            onPress={() => void postAsPlayer($, current.url, '/end', { credential: me.credential })}
+          />
         </Box>
       ) : null
 
@@ -536,6 +558,7 @@ export const register: Register = on => {
             {myEntry?.role === 'candidate' ? <Text color="yellow">你是候補者，等待下一局</Text> : null}
             {readyButton}
             {startButtons}
+            {endButton}
             {current.state?.phase === 'countdown' ? (
               <Text bold color="yellow">{`倒數 ${Math.ceil((current.state.startsInMs ?? 0) / 1000)} 秒`}</Text>
             ) : null}

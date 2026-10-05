@@ -52,15 +52,23 @@ export const createService = (
   { newCredential, hostKey = '', random = Math.random }: ServiceOptions,
 ): Service => {
   const players: Player[] = []
-  /** 本局：開局前為 null；開局後記下編號、難度、題目、答案與正式開始的時間 */
-  let round: { id: number; difficulty: Difficulty; puzzle: string; solution: string; startsAt: number } | null = null
+  /** 本局：開局前為 null；開局後記下編號、難度、題目、答案、正式開始的時間，以及房主是否已結束本局 */
+  let round: {
+    id: number
+    difficulty: Difficulty
+    puzzle: string
+    solution: string
+    startsAt: number
+    isEnded: boolean
+  } | null = null
   /** 上一次開局用的編號；每次開局加一 */
   let lastRoundId = 0
   /** 本局已完成者，依共同服務收到正確提交的順序排列 */
   let ranking: { credential: string; nickname: string; rank: number; elapsedMs: number }[] = []
 
-  /** 依現在時間判斷本局階段；倒數時間到就算進行中 */
-  const phaseAt = (now: number): Phase => (round === null ? 'lobby' : now < round.startsAt ? 'countdown' : 'playing')
+  /** 依現在時間判斷本局階段；倒數時間到就算進行中，房主結束後為已結束 */
+  const phaseAt = (now: number): Phase =>
+    round === null ? 'lobby' : round.isEnded ? 'ended' : now < round.startsAt ? 'countdown' : 'playing'
 
   /** 依玩家憑證找人；找不到為 undefined */
   const byCredential = (credential: unknown) => players.find(player => player.credential === credential)
@@ -121,7 +129,7 @@ export const createService = (
     // 從這一刻起參賽名單固定；題目現在就出好，但倒數結束前不公開
     const { puzzle, solution } = generate(CLUES[difficulty], random)
     lastRoundId += 1
-    round = { id: lastRoundId, difficulty, puzzle, solution, startsAt: now + COUNTDOWN_MS }
+    round = { id: lastRoundId, difficulty, puzzle, solution, startsAt: now + COUNTDOWN_MS, isEnded: false }
 
     return json(200, { startsInMs: COUNTDOWN_MS })
   }
@@ -143,6 +151,7 @@ export const createService = (
     const player = byCredential(body.credential)
     if (!player) return json(403, { error: '不認得這位玩家' })
     if (player.role !== 'participant') return json(409, { error: '候補者不能提交' })
+    if (phaseAt(now) === 'ended') return json(409, { error: '本局已結束' })
     if (round === null || phaseAt(now) !== 'playing') return json(409, { error: '本局還沒開始' })
     // 上一局（或別的局）的盤面不算進這一局
     if (body.roundId !== round.id) return json(409, { error: '這份盤面不屬於本局' })
@@ -158,6 +167,15 @@ export const createService = (
     return json(200, { rank: entry.rank, elapsedMs: entry.elapsedMs })
   }
 
+  /** 房主結束進行中的本局：之後不再接受提交，未完成的參賽者沒有名次 */
+  const end = (body: Record<string, unknown>, now: number): Response => {
+    if (!isHost(body.credential)) return json(403, { error: '只有房主可以結束本局' })
+    if (round === null || phaseAt(now) !== 'playing') return json(409, { error: '本局不在進行中' })
+    round.isEnded = true
+
+    return json(200, { phase: 'ended' })
+  }
+
   /** 公開狀態：倒數時附上還剩多久 */
   const state = (now: number) => {
     const phase = phaseAt(now)
@@ -167,8 +185,8 @@ export const createService = (
       phase,
       ...(round ? { roundId: round.id } : {}),
       ...(round && phase === 'countdown' ? { startsInMs: round.startsAt - now } : {}),
-      // 題目只在正式開始後公開（spec「公開題目」）
-      ...(round && phase === 'playing'
+      // 題目只在正式開始後公開（spec「公開題目」）；結束後仍公開，讓玩家看著自己的盤面與名次
+      ...(round && (phase === 'playing' || phase === 'ended')
         ? {
             difficulty: round.difficulty,
             puzzle: round.puzzle,
@@ -187,6 +205,7 @@ export const createService = (
       if (method === 'POST' && path === '/start') return start(parseBody(body), now)
       if (method === 'POST' && path === '/remove') return remove(parseBody(body), now)
       if (method === 'POST' && path === '/submit') return submit(parseBody(body), now)
+      if (method === 'POST' && path === '/end') return end(parseBody(body), now)
 
       return json(404, { error: 'not found' })
     },

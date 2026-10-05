@@ -1,5 +1,5 @@
-/** 本局進行到哪裡：lobby 等待準備、countdown 倒數、playing 進行中 */
-export type Phase = 'lobby' | 'countdown' | 'playing'
+/** 本局進行到哪裡：lobby 等待準備、countdown 倒數、playing 進行中、ended 房主已結束 */
+export type Phase = 'lobby' | 'countdown' | 'playing' | 'ended'
 
 /** participant：本局參賽者；candidate：候補者，等下一局 */
 export type Role = 'participant' | 'candidate'
@@ -28,13 +28,13 @@ export type ServiceState = {
   phase: Phase
   /** 開局後才有：本局編號，提交時帶上，避免把上一局的盤面算進這一局 */
   roundId?: number
-  /** 進行中才有：已完成者依名次排列 */
+  /** 進行中與結束後才有：已完成者依名次排列 */
   ranking?: RankEntry[]
   /** 倒數時距離正式開始還有幾毫秒（以共同服務的時間計） */
   startsInMs?: number
-  /** 進行中才有：本局難度 */
+  /** 進行中與結束後才有：本局難度 */
   difficulty?: Difficulty
-  /** 進行中才有：本局題目，81 字元，`.` 為空格 */
+  /** 進行中與結束後才有：本局題目，81 字元，`.` 為空格 */
   puzzle?: string
   players: PlayerSummary[]
 }
