@@ -3,7 +3,7 @@
  * Node 外殼（server.ts）與引擎測試都把請求交給同一份 `handle`；需要時間的地方由呼叫端傳入 `now`。
  */
 
-import type { Difficulty, Phase, Role } from '../types'
+import type { Difficulty, Phase, RankEntry, Role } from '../types'
 import { generate } from './sudoku.ts'
 
 export type Request = { method: string; path: string; body?: string }
@@ -64,7 +64,7 @@ export const createService = (
   /** 上一次開局用的編號；每次開局加一 */
   let lastRoundId = 0
   /** 本局已完成者，依共同服務收到正確提交的順序排列 */
-  let ranking: { credential: string; nickname: string; rank: number; elapsedMs: number }[] = []
+  let ranking: (RankEntry & { credential: string })[] = []
 
   /** 依現在時間判斷本局階段；倒數時間到就算進行中，房主結束後為已結束 */
   const phaseAt = (now: number): Phase =>
@@ -151,13 +151,14 @@ export const createService = (
     const player = byCredential(body.credential)
     if (!player) return json(403, { error: '不認得這位玩家' })
     if (player.role !== 'participant') return json(409, { error: '候補者不能提交' })
-    if (phaseAt(now) === 'ended') return json(409, { error: '本局已結束' })
-    if (round === null || phaseAt(now) !== 'playing') return json(409, { error: '本局還沒開始' })
+    // 已經完成本局的人再送一次（例如重送，本局結束後也一樣）：回原本的名次，不重複計算
+    const done = round?.id === body.roundId ? ranking.find(entry => entry.credential === player.credential) : undefined
+    if (done) return json(200, { rank: done.rank, elapsedMs: done.elapsedMs })
+    const phase = phaseAt(now)
+    if (phase === 'ended') return json(409, { error: '本局已結束' })
+    if (round === null || phase !== 'playing') return json(409, { error: '本局還沒開始' })
     // 上一局（或別的局）的盤面不算進這一局
     if (body.roundId !== round.id) return json(409, { error: '這份盤面不屬於本局' })
-    // 已經完成的人再送一次（例如重送）：回原本的名次，不重複計算
-    const done = ranking.find(entry => entry.credential === player.credential)
-    if (done) return json(200, { rank: done.rank, elapsedMs: done.elapsedMs })
     // 題目只有一個解，所以等於本局答案就同時保證：81 格都是 1–9、題目數字沒改、沒有衝突。
     // 不能只看填滿且沒有衝突（spec「答案驗證」）：那樣改了題目數字的盤面也會過
     if (body.cells !== round.solution) return json(400, { error: '盤面不正確' })
@@ -168,12 +169,26 @@ export const createService = (
   }
 
   /** 房主結束進行中的本局：之後不再接受提交，未完成的參賽者沒有名次 */
-  const end = (body: Record<string, unknown>, now: number): Response => {
+  const endRound = (body: Record<string, unknown>, now: number): Response => {
     if (!isHost(body.credential)) return json(403, { error: '只有房主可以結束本局' })
     if (round === null || phaseAt(now) !== 'playing') return json(409, { error: '本局不在進行中' })
     round.isEnded = true
 
     return json(200, { phase: 'ended' })
+  }
+
+  /** 房主在本局結束後開始下一局：回到大廳，所有人（含候補者）都成為未準備的參賽者 */
+  const nextRound = (body: Record<string, unknown>, now: number): Response => {
+    if (!isHost(body.credential)) return json(403, { error: '只有房主可以開始下一局' })
+    if (phaseAt(now) !== 'ended') return json(409, { error: '本局還沒結束' })
+    for (const player of players) {
+      player.role = 'participant'
+      player.isReady = false
+    }
+    round = null
+    ranking = []
+
+    return json(200, { phase: 'lobby' })
   }
 
   /** 公開狀態：倒數時附上還剩多久 */
@@ -205,7 +220,8 @@ export const createService = (
       if (method === 'POST' && path === '/start') return start(parseBody(body), now)
       if (method === 'POST' && path === '/remove') return remove(parseBody(body), now)
       if (method === 'POST' && path === '/submit') return submit(parseBody(body), now)
-      if (method === 'POST' && path === '/end') return end(parseBody(body), now)
+      if (method === 'POST' && path === '/end') return endRound(parseBody(body), now)
+      if (method === 'POST' && path === '/next') return nextRound(parseBody(body), now)
 
       return json(404, { error: 'not found' })
     },

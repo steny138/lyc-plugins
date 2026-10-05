@@ -5,6 +5,7 @@ import type { CommandRunInput, On } from 'claude-code'
 import { createService } from '../service/core.ts'
 import type { Service } from '../service/core.ts'
 import { solve } from '../service/sudoku.ts'
+import type { RankEntry } from '../types'
 
 const PANE = 'sudoku-online'
 
@@ -285,7 +286,7 @@ const publicState = (service: Service, now: number) =>
     difficulty?: string
     puzzle?: string
     roundId?: number
-    ranking?: { nickname: string; rank: number; elapsedMs: number }[]
+    ranking?: RankEntry[]
   }
 
 /** 面板上可以點的格子（空格） */
@@ -434,15 +435,27 @@ describe('提交與名次', () => {
   })
 })
 
-/** 共同服務已有房主開好一局、正式開始（now = 5000）；回傳核心、房主憑證、題目、答案與本局編號 */
-const playingService = () => {
+/** 共同服務已有房主（密鑰 key）加入；回傳核心與房主憑證 */
+const serviceWithHost = () => {
   const service = createService('instance-1', { newCredential: credentials(), hostKey: 'key' })
   const host = (JSON.parse(postAs(service, '/join', { nickname: 'Host', hostKey: 'key' }).text) as { credential: string })
     .credential
+
+  return { service, host }
+}
+
+/**
+ * 共同服務已有房主開好一局、正式開始（now = 5000）；`others` 是開局前加入並準備好的參賽者。
+ * 回傳核心、房主與參賽者的憑證、題目、答案與本局編號
+ */
+const playingService = (others: string[] = []) => {
+  const { service, host } = serviceWithHost()
+  const players = Object.fromEntries(others.map(nickname => [nickname, credentialOf(service, nickname)]))
+  for (const credential of Object.values(players)) postAs(service, '/ready', { credential, isReady: true })
   postAs(service, '/start', { credential: host, difficulty: 'easy' }, 0)
   const { puzzle, roundId } = publicState(service, 5000)
 
-  return { service, host, puzzle: puzzle!, answer: solve(puzzle!)!, roundId: roundId! }
+  return { service, host, players, puzzle: puzzle!, answer: solve(puzzle!)!, roundId: roundId! }
 }
 
 describe('共同服務驗證提交', () => {
@@ -520,6 +533,39 @@ describe('提交資格', () => {
     expect(postAs(service, '/submit', { credential: host, roundId, cells: answer }, 4000).status).toBe(409)
     expect(publicState(service, 6000).ranking).toEqual([])
   })
+
+  test('同一時刻的兩筆提交依共同服務收到的順序排名', () => {
+    const { service, players, answer, roundId } = playingService(['Bob', 'Carol'])
+    postAs(service, '/submit', { credential: players.Carol, roundId, cells: answer }, 8000)
+    postAs(service, '/submit', { credential: players.Bob, roundId, cells: answer }, 8000)
+
+    expect(publicState(service, 8000).ranking).toEqual([
+      { nickname: 'Carol', rank: 1, elapsedMs: 3000 },
+      { nickname: 'Bob', rank: 2, elapsedMs: 3000 },
+    ])
+  })
+
+  test('本局結束後送出正確答案不能取得名次', () => {
+    const { service, host, players, answer, roundId } = playingService(['Bob'])
+    postAs(service, '/end', { credential: host }, 6000)
+
+    const late = postAs(service, '/submit', { credential: players.Bob, roundId, cells: answer }, 7000)
+
+    expect(late.status).toBe(409)
+    expect(JSON.parse(late.text)).toEqual({ error: '本局已結束' })
+    expect(publicState(service, 7000).ranking).toEqual([])
+  })
+
+  test('已完成的人在本局結束後重送，仍拿回原本的名次與用時', () => {
+    const { service, host, answer, roundId } = playingService()
+    postAs(service, '/submit', { credential: host, roundId, cells: answer }, 6000)
+    postAs(service, '/end', { credential: host }, 7000)
+
+    const again = postAs(service, '/submit', { credential: host, roundId, cells: answer }, 8000)
+
+    expect(again.status).toBe(200)
+    expect(JSON.parse(again.text)).toEqual({ rank: 1, elapsedMs: 1000 })
+  })
 })
 
 describe('完成時連不上', () => {
@@ -542,6 +588,44 @@ describe('完成時連不上', () => {
 
     expect(await ui.find({ type: 'Text', text: '你是第 1 名，用時 0:11' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '已完成，尚未取得共同服務確認' })).toBeUndefined()
+  })
+})
+
+describe('完成時連不上後原局失效', () => {
+  test('填完時連不上、恢復時位址上已換成新的共同服務實例，就不再重送', async ($, on) => {
+    stubEngine(on)
+    const clock = mock.clock(on)
+    const { service: first, host } = serviceWithHost()
+    const second = newService('instance-2')
+    const network = { isDown: false, service: first, submitsToSecond: 0 }
+    on('http.fetch', (_$, e) => {
+      if (network.isDown) throw new Error('connect ECONNREFUSED')
+      const path = e.url.replace(/^https?:\/\/[^/]+/, '') || '/'
+      if (network.service === second && path === '/submit') network.submitsToSecond += 1
+      const response = network.service.handle({ method: e.init?.method ?? 'GET', path, body: e.init?.body }, clock.now())
+
+      return { value: { ...response, ok: response.status >= 200 && response.status < 300, headers: {} } }
+    })
+    await run($, 'join http://test:47900')
+    const ui = await mountPane($)
+    await ui.input({ key: 'nickname', text: 'Bob' })
+    await ui.press({ key: 'ready' })
+    postAs(first, '/start', { credential: host, difficulty: 'easy' }, clock.now())
+    await clock.advance(5000)
+    const puzzle = publicState(first, clock.now()).puzzle!
+    const last = puzzle.lastIndexOf('.')
+    await fillAnswer(ui, puzzle, [last])
+    network.isDown = true
+    await ui.press({ key: `cell-${last}` })
+    await ui.press({ key: `digit-${solve(puzzle)![last]}` })
+
+    // 房主重啟共同服務：同一個位址，新的實例
+    network.service = second
+    network.isDown = false
+    await clock.advance(3000)
+
+    expect(await ui.find({ type: 'Text', text: '原局已失效，請重新加入' })).toBeDefined()
+    expect(network.submitsToSecond).toBe(0)
   })
 })
 
@@ -572,9 +656,7 @@ describe('結束本局', () => {
   test('填完時連不上、房主在這期間結束本局，恢復後顯示本局已結束、未取得名次', async ($, on) => {
     stubEngine(on)
     const clock = mock.clock(on)
-    const service = createService('instance-1', { newCredential: credentials(), hostKey: 'key' })
-    const host = (JSON.parse(postAs(service, '/join', { nickname: 'Host', hostKey: 'key' }).text) as { credential: string })
-      .credential
+    const { service, host } = serviceWithHost()
     const network: Network = { isDown: false }
     routeFetch(on, service, network, clock)
     await run($, 'join http://test:47900')
@@ -597,6 +679,34 @@ describe('結束本局', () => {
     expect(await ui.find({ type: 'Text', text: '本局已結束，未取得名次' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '已完成，尚未取得共同服務確認' })).toBeUndefined()
     expect(publicState(service, clock.now()).ranking).toEqual([])
+  })
+})
+
+describe('下一局', () => {
+  test('本局結束後房主按下一局：回到大廳、候補者成為參賽者且未準備、名次清掉，再開局是新盤面', async ($, on) => {
+    const { ui, service, clock, first } = await playAsHost($, on)
+    await ui.press({ key: first })
+    await ui.press({ key: 'digit-5' })
+    const late = credentialOf(service(), 'Late')
+    await ui.press({ key: 'end' })
+    expect(postAs(service(), '/next', { credential: late }, clock.now()).status).toBe(403)
+
+    await ui.press({ key: 'next' })
+
+    expect(await ui.find({ type: 'Text', text: '本局：等待準備' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '・Late' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '候補者（1）' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '名次' })).toBeUndefined()
+    expect(await cellButtons(ui)).toHaveLength(0)
+
+    postAs(service(), '/ready', { credential: late, isReady: true }, clock.now())
+    await clock.advance(1000)
+    await ui.press({ key: 'start-easy' })
+    await clock.advance(5000)
+
+    const labels = await Promise.all((await cellButtons(ui)).map(el => cellLabel(ui, el.key!)))
+    expect(labels).toHaveLength(81 - 44)
+    expect(labels.every(label => label === '·')).toBe(true)
   })
 })
 

@@ -31,6 +31,15 @@ const PHASE_LABELS: Record<ServiceState['phase'], string> = {
   ended: '本局：已結束',
 }
 
+/** 房主推進本局的按鈕：key 是按鈕的 key，path 是要送給共同服務的請求 */
+type RoundAction = { key: string; label: string; hotkey: string; path: string }
+
+/** 房主在各階段推進本局的按鈕：進行中結束本局、結束後開始下一局 */
+const ROUND_ACTIONS: Partial<Record<ServiceState['phase'], RoundAction>> = {
+  playing: { key: 'end', label: '結束本局', hotkey: 'q', path: '/end' },
+  ended: { key: 'next', label: '下一局', hotkey: 'n', path: '/next' },
+}
+
 /** 第 n 列（或行）之後是宮與宮的邊界 */
 const isBoxEdge = (n: number) => n === 2 || n === 5
 
@@ -193,7 +202,8 @@ const submitIfDone = async ($: EngineInterface, url: string) => {
   const local = await read($, board)
   const state = current?.state ?? null
   const me = current?.me
-  if (!me || !state || state.phase !== 'playing' || state.roundId === undefined) return
+  // 原局已失效：位址上是另一個共同服務實例，不認得這份盤面與玩家憑證
+  if (!me || !state || current?.isExpired || state.phase !== 'playing' || state.roundId === undefined) return
   if (!local || local.puzzle !== state.puzzle || !isComplete(local.cells) || rankOf(state, me.nickname)) return
   await postAsPlayer($, url, '/submit', { credential: me.credential, roundId: state.roundId, cells: local.cells })
 }
@@ -394,8 +404,9 @@ export const register: Register = on => {
     // 大廳階段、非房主的參賽者才有準備按鈕；房主按開局就算準備
     const me = current.me
     const myEntry = current.state?.players.find(player => player.nickname === me?.nickname)
+    const phase = current.state?.phase
     const readyButton =
-      me && !me.isHost && myEntry?.role === 'participant' && current.state?.phase === 'lobby' ? (
+      me && !me.isHost && myEntry?.role === 'participant' && phase === 'lobby' ? (
         <Box marginTop={1}>
           <Button
             key="ready"
@@ -410,11 +421,10 @@ export const register: Register = on => {
     const candidates = current.state?.players.filter(player => player.role === 'candidate') ?? []
     // 房主在大廳可以移出還沒準備的參賽者（不含自己）
     const canRemove = (player: PlayerSummary) =>
-      me?.isHost === true && current.state?.phase === 'lobby' && !player.isHost && !player.isReady
+      me?.isHost === true && phase === 'lobby' && !player.isHost && !player.isReady
 
-    // 進行中與結束後的參賽者看得到盤面；候補者沒有
-    const phase = current.state?.phase
-    const puzzle = (phase === 'playing' || phase === 'ended') && myEntry?.role === 'participant' ? current.state?.puzzle : undefined
+    // 共同服務公開題目時（進行中與結束後）參賽者看得到盤面；候補者沒有
+    const puzzle = myEntry?.role === 'participant' ? current.state?.puzzle : undefined
     const local = puzzle === undefined ? null : boardFor(await read($, board), puzzle)
     const clashing = local === null ? new Set<number>() : conflicts(local.cells)
     // 共同服務列了名次、或本局已結束，就鎖住盤面
@@ -502,22 +512,9 @@ export const register: Register = on => {
         </Box>
       ) : null
 
-    // 進行中的房主可以結束本局
-    const endButton =
-      me?.isHost && phase === 'playing' ? (
-        <Box marginTop={1}>
-          <Button
-            key="end"
-            label="結束本局"
-            hotkey="q"
-            onPress={() => void postAsPlayer($, current.url, '/end', { credential: me.credential })}
-          />
-        </Box>
-      ) : null
-
     // 大廳階段的房主才有開局按鈕，一個難度一個
     const startButtons =
-      me?.isHost && current.state?.phase === 'lobby' ? (
+      me?.isHost && phase === 'lobby' ? (
         <Box marginTop={1} gap={1}>
           {DIFFICULTIES.map(difficulty => (
             <Button
@@ -527,6 +524,20 @@ export const register: Register = on => {
               onPress={() => void postAsPlayer($, current.url, '/start', { credential: me.credential, difficulty })}
             />
           ))}
+        </Box>
+      ) : null
+
+    // 房主在進行中可以結束本局、結束後可以開始下一局
+    const roundAction = phase === undefined ? undefined : ROUND_ACTIONS[phase]
+    const roundButton =
+      me?.isHost && roundAction ? (
+        <Box marginTop={1}>
+          <Button
+            key={roundAction.key}
+            label={roundAction.label}
+            hotkey={roundAction.hotkey}
+            onPress={() => void postAsPlayer($, current.url, roundAction.path, { credential: me.credential })}
+          />
         </Box>
       ) : null
 
@@ -558,9 +569,9 @@ export const register: Register = on => {
             {myEntry?.role === 'candidate' ? <Text color="yellow">你是候補者，等待下一局</Text> : null}
             {readyButton}
             {startButtons}
-            {endButton}
-            {current.state?.phase === 'countdown' ? (
-              <Text bold color="yellow">{`倒數 ${Math.ceil((current.state.startsInMs ?? 0) / 1000)} 秒`}</Text>
+            {roundButton}
+            {phase === 'countdown' ? (
+              <Text bold color="yellow">{`倒數 ${Math.ceil((current.state?.startsInMs ?? 0) / 1000)} 秒`}</Text>
             ) : null}
             {current.actionError ? <Text color="red">{current.actionError}</Text> : null}
             {boardView}
