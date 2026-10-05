@@ -14,6 +14,11 @@
       "name": "tetris",
       "source": "./plugins/tetris",
       "description": "在 Pane 玩俄羅斯方塊：移植 samtay/tetris 的單機玩法"
+    },
+    {
+      "name": "sudoku-online",
+      "source": "./plugins/sudoku-online",
+      "description": "區網數獨競速：房主一鍵開局，同一道題比誰先完成"
     }
   ]
 }
