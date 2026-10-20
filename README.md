@@ -51,6 +51,7 @@ Type `/tetris` to open the pane; run it again to close it.
 | `f` | Hard drop (locks on the next gravity tick) |
 | `p` | Pause / resume |
 | `r` | Restart |
+| `g` | Switch between the text and image board |
 
 Hotkeys work while the pane has focus (click it, or press `ctrl+x tab`).
 
