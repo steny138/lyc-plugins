@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { stubEngine, run, mountPane, board, place, SINGLE_STEPS, LONG_STEPS, rasterCells } from './test-support'
+import { stubEngine, run, mountPane, board, place, SINGLE_STEPS, LONG_STEPS, rasterCells, imageCells } from './test-support'
 test('指令開啟自己的棋盤、下一塊與初始統計', async ($, on) => {
   stubEngine(on)
   mock.clock(on)
@@ -225,10 +225,12 @@ test('空間不足時說明尺寸，仍能手動暫停而不自動暫停', async
   expect(await ui.find({ type: 'Text', text: '遊戲中' })).toBeDefined()
   await ui.press({ key: 'pause' })
   expect(await ui.find({ type: 'Text', text: '已暫停' })).toBeDefined()
+  // 空間不足時仍可切換棋盤，避免圖片模式卡住
+  expect((await ui.find({ key: 'image' }))!.props.hotkey).toBe('g')
 })
-test('最少列數等於版面實際高度：並排 20 列、直排 31 列、窄版 34 列', async ($, on) => {
+test('最少列數等於版面實際高度：並排 20 列、直排 32 列、窄版 35 列', async ($, on) => {
   stubEngine(on); mock.clock(on); await run($)
-  for (const [columns, rows, fits] of [[42, 20, true], [42, 19, false], [41, 31, true], [41, 30, false], [30, 34, true], [30, 33, false]] as const) {
+  for (const [columns, rows, fits] of [[42, 20, true], [42, 19, false], [41, 32, true], [41, 31, false], [30, 35, true], [30, 34, false]] as const) {
     const ui = await mountPane($, columns, rows)
     expect(await ui.find({ key: 'board' }) !== undefined).toBe(fits)
     expect(await ui.find({ type: 'Text', text: /面板至少需要/ }) !== undefined).toBe(!fits)
@@ -287,4 +289,44 @@ test('同形 L 的活動四格以 ▓ 與固定的 █ 區分，暫停時仍可�
   expect(fixed.every(cell => cell.char === '█')).toBe(true)
   await ui.press({ key: 'pause' }); await clock.advance(1000)
   expect(await rasterCells(ui)).toEqual(cells)
+})
+
+test('預設文字棋盤，按 G 切換成圖片棋盤並可切回', async ($, on) => {
+  stubEngine(on); mock.clock(on); await run($); const ui = await mountPane($)
+  expect((await ui.find({ key: 'board' }))!.type).toBe('Raster')
+  expect((await ui.find({ key: 'image' }))!.props).toMatchObject({ label: '圖片棋盤 G', hotkey: 'g' })
+  await ui.press({ key: 'image' })
+  const el = await ui.find({ key: 'board' })
+  expect(el!.type).toBe('Image')
+  expect(el!.props).toMatchObject({ columns: 20, rows: 20, source: { width: 80, height: 160 } })
+  expect(el!.props.alt).toContain('按 G 切回文字棋盤')
+  expect((await ui.find({ key: 'image' }))!.props.label).toBe('文字棋盤 G')
+  await ui.press({ key: 'image' })
+  expect((await ui.find({ key: 'board' }))!.type).toBe('Raster')
+})
+test('圖片棋盤與文字棋盤的方塊位置與顏色一致，活動方塊較亮', async ($, on) => {
+  stubEngine(on); const clock = mock.clock(on); await clock.advance(2)
+  await run($); const ui = await mountPane($)
+  await ui.press({ key: 'drop' }); await clock.advance(400)
+  for (let i = 0; i < 4; i++) await ui.press({ key: 'down' })
+  const text = await rasterCells(ui)
+  await ui.press({ key: 'image' })
+  const image = await imageCells(ui)
+  const empty = image[0]!
+  for (let i = 0; i < 200; i++) expect(image[i] !== empty).toBe(text[i]!.shape !== undefined)
+  // 固定方塊中心即形狀色；活動方塊同形狀但更亮
+  const fixed = text.flatMap((cell, i) => cell.char === '█' ? [i] : [])
+  const active = text.flatMap((cell, i) => cell.char === '▓' ? [i] : [])
+  expect(fixed.length).toBeGreaterThan(0); expect(active).toHaveLength(4)
+  for (const i of fixed) expect(image[i]).toBe(text[i]!.foreground)
+  const brightness = (c: number) => (c >> 16) + ((c >> 8) & 0xff) + (c & 0xff)
+  for (const i of active) expect(brightness(image[i]!)).toBeGreaterThan(brightness(text[i]!.foreground))
+})
+test('圖片模式隨重力更新，關閉再開仍保留圖片模式', async ($, on) => {
+  stubEngine(on); const clock = mock.clock(on); await run($); await clock.settle(); const ui = await mountPane($)
+  await ui.press({ key: 'image' })
+  const before = await imageCells(ui)
+  await clock.advance(400); expect(await imageCells(ui)).not.toEqual(before)
+  await run($); await run($)
+  expect((await ui.find({ key: 'board' }))!.type).toBe('Image')
 })

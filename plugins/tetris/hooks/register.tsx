@@ -1,8 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import { newGame, move, rotate, tick, interval, drop, isGameOver } from './tetris'
-import { raster, preview } from './render'
+import { raster, pixels, preview } from './render'
 const game = atom({ plugin: 'tetris', key: 'game' } as const, null)
+/** 棋盤以圖片（Image）顯示；預設 false 為文字（Raster），終端不支援圖片時可切回。 */
+const image = atom({ plugin: 'tetris', key: 'image' } as const, false)
 let timer: { cancel: () => void } | undefined
 let generation = 0
 /** 排程綁定目前 session，切換 session 時不可沿用舊 callback。 */
@@ -68,21 +70,26 @@ export const register: Register = on => {
       const { Text } = $.ui.resolve(e)
       return <Text>請在 Claude Code CLI 終端開啟 /tetris 遊玩。</Text>
     }
-    const { Box, Text, Raster, Button } = $.ui.resolve(e)
+    const { Box, Text, Raster, Image, Button } = $.ui.resolve(e)
     const current = await read($, game)
     if (!current) return <Text>輸入 /tetris 開始</Text>
     const status = isGameOver(current) ? '遊戲結束' : current.paused ? '已暫停' : current.locked ? '正在固定（下一 tick）' : '遊戲中'
     /** 並排：棋盤 20 欄＋間隔 1＋右欄 21（最長為狀態「正在固定（下一 tick）」），高度取棋盤 20 列。 */
     const sideBySide = e.props.bodyColumns >= 42
-    /** 直排：棋盤 20 + 按鈕（橫排 1、直排 4）+ 落底／暫停／重開 3 + 狀態與下一塊 2 + 預覽 2 + 統計 3。 */
-    const minRows = sideBySide ? 20 : e.props.bodyColumns < 36 ? 34 : 31
+    /** 直排：棋盤 20 + 按鈕（橫排 1、直排 4）+ 落底／暫停／重開／圖片 4 + 狀態與下一塊 2 + 預覽 2 + 統計 3。 */
+    const minRows = sideBySide ? 20 : e.props.bodyColumns < 36 ? 35 : 32
+    const asImage = await read($, image)
+    const toggle = <Button key="image" label={asImage ? '文字棋盤 G' : '圖片棋盤 G'} hotkey="g" onPress={() => update($, image, prev => !prev)} />
     if (e.props.bodyColumns < 22 || e.props.scroll.bodyRows < minRows) return <Box flexDirection="column">
       <Text>{`面板至少需要 22 欄與 ${minRows} 列（目前 ${e.props.bodyColumns} 欄 × ${e.props.scroll.bodyRows} 列，${e.props.placement}），請放大終端或面板。`}</Text>
       <Text>{status}</Text>
       <Button key="pause" label={current.paused ? '繼續 P' : '暫停 P'} hotkey="p" onPress={() => pause($)} />
       <Button key="restart" label="重新開始 R" hotkey="r" onPress={() => restart($)} />
+      {toggle}
     </Box>
-    const board = <Raster key="board" columns={20} rows={20} cells={raster(current)} />
+    const board = asImage
+      ? <Image key="board" columns={20} rows={20} source={pixels(current)} alt="按 G 切回文字棋盤" />
+      : <Raster key="board" columns={20} rows={20} cells={raster(current)} />
     const left = <Button key="left" label="左 A" hotkey="a" onPress={() => update($, game, prev => prev ? move(prev, 'left') : prev)} />
     const right = <Button key="right" label="右 D" hotkey="d" onPress={() => update($, game, prev => prev ? move(prev, 'right') : prev)} />
     const down = <Button key="down" label="下 S" hotkey="s" onPress={() => update($, game, prev => prev ? move(prev, 'down') : prev)} />
@@ -91,6 +98,7 @@ export const register: Register = on => {
       <Button key="drop" label="落底 F" hotkey="f" onPress={() => update($, game, prev => prev ? drop(prev) : prev)} />,
       <Button key="pause" label={current.paused ? "繼續 P" : "暫停 P"} hotkey="p" onPress={() => pause($)} />,
       <Button key="restart" label="重新開始 R" hotkey="r" onPress={() => restart($)} />,
+      toggle,
     ]
     const info = [
       <Text>{status}</Text>,
